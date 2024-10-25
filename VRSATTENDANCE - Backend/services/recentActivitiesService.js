@@ -1,5 +1,5 @@
 const RecentActivity = require('../models/recentActivity');
-const Attendance = require('../models/attendance');
+// const Attendance = require('../models/attendance');
 const Task = require('../models/task');
 
 exports.fetchRecentActivities = async (userId) => {
