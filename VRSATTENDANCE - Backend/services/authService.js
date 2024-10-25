@@ -1,7 +1,7 @@
 const User = require('../models/User');
 const sendNotification = require('../utils/notification'); // Adjust the path if needed
 const { generateAccessToken, generateRefreshToken } = require('../utils/generateToken');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const { sendEmail } = require('./LoginemailService'); // Adjust the path if needed
 const { sendRegistrationEmail } = require('./registrationemailnotificationService');
 const { sendNotificationEmail } = require('./passwordChangeEmailService');
