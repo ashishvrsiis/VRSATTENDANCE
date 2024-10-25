@@ -70,8 +70,8 @@ setupWebSocket(wss);
 // const credentials = {key: privatekey, cert: certificate};
 
 const PORT = process.env.PORT || 3000;
-const httpsServer = http.createServer(app);
-httpsServer.listen(PORT, '0.0.0.0', () => {
+const httpServer = http.createServer(app);
+httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`HTTP Server is running on port ${PORT}`);
 });
 
