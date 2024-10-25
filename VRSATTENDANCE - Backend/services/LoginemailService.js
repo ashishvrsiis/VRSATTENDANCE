@@ -33,7 +33,7 @@ exports.sendEmail = async (to, { subject, name, message, otp, link, email, butto
         },
     });
 
-    const templatePath = path.join('VRSATTENDANCE','VRSATTENDANCE - Backend', 'templates', 'LoginEmailTemplate.html');
+    const templatePath = path.join(__dirname, '..', 'templates', 'LoginEmailTemplate.html');
 
     // Load and customize the HTML template
     let htmlContent;
