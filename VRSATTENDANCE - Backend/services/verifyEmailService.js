@@ -15,7 +15,7 @@ const loadTemplate = (filePath, replacements) => {
 const sendNotificationEmail = async (to, { subject, templateName, replacements }) => {
     // Define paths for different templates
     const templates = {
-        'verifyEmail': path.join('C:', 'Users', 'ashis', 'OneDrive', 'Desktop', 'Work', 'VRSATTENDANCE - Backend', 'templates', 'verifyEmail.html'),
+        'verifyEmail': path.join(__dirname, '..', 'templates', 'verifyEmail.html'),
     
     };
 

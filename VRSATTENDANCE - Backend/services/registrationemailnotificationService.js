@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Path to the registration request email template
-const templatePath = path.join('C:', 'Users', 'ashis', 'OneDrive', 'Desktop', 'Work', 'VRSATTENDANCE - Backend', 'templates', 'registrationRequest.html');
+const templatePath = path.join(__dirname, '..', 'templates', 'registrationRequest.html');
 
 // Function to load the HTML template and replace placeholders
 const loadTemplate = (filePath, replacements) => {
