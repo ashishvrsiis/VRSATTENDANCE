@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Account Rejected</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f4f4;
+            color: #333;
+        }
+        .email-container {
+            max-width: 600px;
+            margin: 20px auto;
+            background-color: #ffffff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        .email-header {
+            text-align: center;
+            background-color: #f44336;
+            color: white;
+            padding: 20px;
+        }
+        .email-body {
+            padding: 20px;
+        }
+        .email-footer {
+            text-align: center;
+            background-color: #25325F;
+            color: #ffffff;
+            padding: 20px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="email-container">
+        <div class="email-header">
+            <h1>Account Rejected</h1>
+        </div>
+        <div class="email-body">
+            <p>Hello {{name}},</p>
+            <p>We regret to inform you that your account registration has been rejected by an admin. For more details, please contact support.</p>
+        </div>
+        <div class="email-footer">
+            &copy; 2024 VRS INTELLIGENT INNOVATIVE SYSTEM PVT LTD. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>
