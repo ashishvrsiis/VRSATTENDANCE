@@ -1,5 +1,6 @@
 const fs = require('fs');
-const https = require('https');
+// const https = require('https');
+const http = require('http');
 const express = require('express');
 const WebSocket = require('ws');
 const dotenv = require('dotenv');
@@ -56,7 +57,7 @@ app.use('/api/v1/password-management', passwordRoutes);
 app.use('/api/holidays', holidayRoutes);
 app.use('/api/location', locationRoutes);
 
-const server = https.createServer(app);
+const server = http.createServer(app);
 
 const wss = new WebSocket.Server({ server });
 setupWebSocket(wss);
@@ -69,8 +70,8 @@ const certificate = fs.readFileSync(certificatePath, 'utf8');
 const credentials = {key: privatekey, cert: certificate};
 
 const PORT = process.env.PORT || 3000;
-const httpsServer = https.createServer(credentials, app);
+const httpsServer = http.createServer(app);
 httpsServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`HTTPS Server is running on port ${PORT}`);
+    console.log(`HTTP Server is running on port ${PORT}`);
 });
 
