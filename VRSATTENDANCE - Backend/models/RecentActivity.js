@@ -16,6 +16,6 @@ const recentActivitySchema = new mongoose.Schema({
     },
 });
 
-const RecentActivity = mongoose.models.RecentActivity || mongoose.model('RecentActivity', recentActivitySchema);
+const RecentActivity = mongoose.models.recentActivity || mongoose.model('recentActivity', recentActivitySchema);
 
 module.exports = RecentActivity;

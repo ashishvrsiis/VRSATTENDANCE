@@ -10,7 +10,7 @@ exports.fetchRecentActivities = async (userId) => {
         const recentActivities = await RecentActivity.find({ userId }).sort({ timestamp: -1 });
         activities.push(...recentActivities.map(activity => ({
             ...activity.toObject(),
-            source: 'RecentActivity'
+            source: 'recentActivity'
         })));
 
         // Fetch from Attendance collection
