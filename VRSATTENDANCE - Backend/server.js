@@ -62,12 +62,12 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 setupWebSocket(wss);
 
-const privateKeyPath = 'C:/Users/ashis/OneDrive/Desktop/Work/VRSATTENDANCE - Backend/myCA.key';
-const certificatePath = 'C:/Users/ashis/OneDrive/Desktop/Work/VRSATTENDANCE - Backend/myCA.pem';
+// const privateKeyPath = 'C:/Users/ashis/OneDrive/Desktop/Work/VRSATTENDANCE - Backend/myCA.key';
+// const certificatePath = 'C:/Users/ashis/OneDrive/Desktop/Work/VRSATTENDANCE - Backend/myCA.pem';
 
-const privatekey = fs.readFileSync(privateKeyPath, 'utf8');
-const certificate = fs.readFileSync(certificatePath, 'utf8');
-const credentials = {key: privatekey, cert: certificate};
+// const privatekey = fs.readFileSync(privateKeyPath, 'utf8');
+// const certificate = fs.readFileSync(certificatePath, 'utf8');
+// const credentials = {key: privatekey, cert: certificate};
 
 const PORT = process.env.PORT || 3000;
 const httpsServer = http.createServer(app);
