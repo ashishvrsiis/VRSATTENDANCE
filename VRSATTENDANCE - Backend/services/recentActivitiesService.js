@@ -1,4 +1,4 @@
-const RecentActivity = require('../models/recentActivity');
+const RecentActivity = require('../models/RecentActivity');
 // const Attendance = require('../models/attendance');
 const Task = require('../models/task');
 
