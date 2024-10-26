@@ -11,6 +11,8 @@ router.post('/check-email', validateEmail, userController.checkEmail);
 router.get('/users', authenticateToken, userController.getAllUsers);
 router.get('/search', authenticateToken, userController.searchUsers);
 router.post('/update-employee-id', authenticateToken, userController.updateEmployeeIdForUser);
+router.delete('/users/:id', authenticateToken, userController.deleteUser);
+router.put('/users/:id', authenticateToken, userController.editUser);
 
 
 module.exports = router;

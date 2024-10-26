@@ -77,3 +77,46 @@ exports.searchUsers = async (query) => {
 
     return await User.find(searchCriteria);
 };
+
+exports.deleteUser = async (userId, requester) => {
+    const userToDelete = await User.findById(userId);
+    console.log('User to Delete:', userToDelete); // Log the user to delete
+
+    if (!userToDelete) {
+        throw new Error('User not found');
+    }
+
+    // Role-based deletion rules
+    console.log('Requester Role:', requester.role); // Log the requester's role
+    if (requester.role === 3) {
+        throw new Error('Manager/Employee cannot delete users');
+    }
+    if (requester.role === 2 && [1, 2].includes(userToDelete.role)) {
+        throw new Error('Admin cannot delete other admins or super admins');
+    }
+
+    // Proceed if requester is Super Admin (role 1)
+    await User.findByIdAndDelete(userId);
+    return userToDelete;
+};
+
+exports.editUser = async (userId, updateData, requester) => {
+    const userToEdit = await User.findById(userId);
+
+    if (!userToEdit) {
+        throw new Error('User not found');
+    }
+
+    // Role-based edit rules
+    if (requester.role === 3) {
+        throw new Error('Manager/Employee cannot edit users');
+    }
+    if (requester.role === 2 && [1, 2].includes(userToEdit.role)) {
+        throw new Error('Admin cannot edit other admins or super admins');
+    }
+
+    // Proceed to update user information
+    Object.assign(userToEdit, updateData);
+    await userToEdit.save();
+    return userToEdit;
+};

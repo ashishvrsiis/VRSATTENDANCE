@@ -201,3 +201,25 @@ exports.searchUsers = async (req, res) => {
         res.status(500).json({ message: 'Server error' });
     }
 };
+
+exports.deleteUser = async (req, res) => {
+    try {
+        console.log('Request Params:', req.params); // Log request parameters
+        console.log('Requester Info:', req.user); // Log requester user info
+
+        const deletedUser = await userService.deleteUser(req.params.id, req.user);
+        res.status(200).json({ message: 'User deleted successfully', deletedUser });
+    } catch (error) {
+        console.error('Error Deleting User:', error.message); // Log error details
+        res.status(403).json({ message: error.message });
+    }
+};
+
+exports.editUser = async (req, res) => {
+    try {
+        const updatedUser = await userService.editUser(req.params.id, req.body, req.user);
+        res.status(200).json({ message: 'User updated successfully', updatedUser });
+    } catch (error) {
+        res.status(403).json({ message: error.message });
+    }
+};
