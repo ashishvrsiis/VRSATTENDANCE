@@ -4,7 +4,8 @@ const moment = require('moment');
 const momentRange = require('moment-range');
 momentRange.extendMoment(moment);
 const User = require('../models/User');
-
+const attendanceRegularizationService = require('../services/attendanceRegularizationService');
+const Toll = require('../models/tollModel');
 
 exports.getTodayAttendance = async (userId, date) => {
     try {
@@ -49,6 +50,18 @@ exports.getMonthlyAttendance = async (userId, startOfMonth, endOfMonth) => {
     }
 };
 
+const getDistanceFromLatLonInKm = (lat1, lon1, lat2, lon2) => {
+    const R = 6371; // Radius of Earth in kilometers
+    const dLat = (lat2 - lat1) * (Math.PI / 180);
+    const dLon = (lon2 - lon1) * (Math.PI / 180);
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c; // Distance in km
+};
+
 exports.markAttendance = async (userId, today, status, data) => {
     console.log(`markAttendance called with userId: ${userId}, date: ${today}, status: ${status}, data:`, data);
 
@@ -58,18 +71,38 @@ exports.markAttendance = async (userId, today, status, data) => {
         throw new Error('Invalid status. Only "start" or "end" are allowed.');
     }
 
+    // Fetch toll plaza data from the database
+    const tollPlazas = await Toll.find({});
+    console.log('Fetched toll plaza data from database:', tollPlazas);
+
+    // Check if the location is within 1 km of any toll plaza
+    let withinRange = false;
+    const userLat = parseFloat(data.latitude);
+    const userLon = parseFloat(data.longitude);
+
+    for (const plaza of tollPlazas) {
+        const plazaLat = parseFloat(plaza.Latitude);
+        const plazaLon = parseFloat(plaza.Longitude);
+
+        const distance = getDistanceFromLatLonInKm(userLat, userLon, plazaLat, plazaLon);
+        console.log(`Distance to ${plaza.LocationName}: ${distance} km`);
+
+        if (distance <= 1) {
+            withinRange = true;
+            break; // No need to check further if within range
+        }
+    }
+
     // Find the latest attendance record for the user on the current day
     let attendance = await Attendance.findOne({ userId, date: today }).sort({ createdAt: -1 });
     console.log('Found attendance record:', attendance);
 
     if (status === 'start') {
         if (attendance && !attendance.punchOut) {
-            // An active shift is already started and not ended
             console.log('Error: An active shift is already started and not ended.');
             throw new Error('You must end the current shift before starting a new one.');
         }
 
-        // Create or update the attendance record to mark the start of the shift
         if (!attendance || (attendance && attendance.punchOut)) {
             attendance = new Attendance({
                 userId,
@@ -86,12 +119,10 @@ exports.markAttendance = async (userId, today, status, data) => {
 
     } else if (status === 'end') {
         if (!attendance || !attendance.punchIn || attendance.punchOut) {
-            // No active shift started or shift already ended
             console.log('Error: No active shift started or shift already ended.');
             throw new Error('You must start a shift before ending it.');
         }
 
-        // Update the existing record to mark the end of the shift
         attendance.punchOut = new Date();
         console.log('Updated existing attendance record for end:', attendance);
     }
@@ -99,6 +130,21 @@ exports.markAttendance = async (userId, today, status, data) => {
     // Save the attendance record
     await attendance.save();
     console.log('Attendance saved successfully.');
+
+    // Handle attendance regularization if not within 1 km range
+    if (!withinRange) {
+        await attendanceRegularizationService.applyAttendanceRegularization({
+            approverName: 'System',
+            startDate: today,
+            endDate: today,
+            remarks: 'Attendance marked outside the toll plaza range',
+            leaveType: 'OutOfRange', // Provide a valid leaveType here
+            regularizationType: 'Out of range',
+            userId,
+        });
+        return { message: `Shift ${status} marked successfully. Please regularize your attendance as it is outside the toll plaza range.` };
+    }
+
     return { message: `Shift ${status} marked successfully.` };
 };
 

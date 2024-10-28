@@ -25,6 +25,7 @@ const { authenticateUser } = require('./middleware/authenticateToken');
 // const notificationRoutes = require('./routes/notificationRoutes');
 const holidayRoutes = require('./routes/holidayRoutes');
 const locationRoutes = require('./routes/locationRoutes');
+const tollRoutes = require('./routes/tollRoutes');
 
 dotenv.config();
 
@@ -56,6 +57,7 @@ app.use('/api/v1/leavebalances', leaveBalanceRoutes);
 app.use('/api/v1/password-management', passwordRoutes);
 app.use('/api/holidays', holidayRoutes);
 app.use('/api/location', locationRoutes);
+app.use('/api/v1', tollRoutes);
 
 const server = http.createServer(app);
 
@@ -69,7 +71,7 @@ setupWebSocket(wss);
 // const certificate = fs.readFileSync(certificatePath, 'utf8');
 // const credentials = {key: privatekey, cert: certificate};
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 2000;
 const httpServer = http.createServer(app);
 httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`HTTP Server is running on port ${PORT}`);
