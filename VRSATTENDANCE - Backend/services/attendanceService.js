@@ -6,6 +6,11 @@ momentRange.extendMoment(moment);
 const User = require('../models/User');
 const attendanceRegularizationService = require('../services/attendanceRegularizationService');
 const Toll = require('../models/tollModel');
+const RecentActivity = require('../models/RecentActivity');
+const AttendanceRegularization = require('../models/AttendanceRegularization');
+const PDFDocument = require('pdfkit');
+const fs = require('fs');
+
 
 exports.getTodayAttendance = async (userId, date) => {
     try {
@@ -131,17 +136,39 @@ exports.markAttendance = async (userId, today, status, data) => {
     await attendance.save();
     console.log('Attendance saved successfully.');
 
-    // Handle attendance regularization if not within 1 km range
+    // Check if attendance is out of range
     if (!withinRange) {
-        await attendanceRegularizationService.applyAttendanceRegularization({
-            approverName: 'System',
+        // Check for an existing "OutOfRange" regularization for the current date
+        const existingRegularization = await AttendanceRegularization.findOne({
+            userId,
             startDate: today,
             endDate: today,
-            remarks: 'Attendance marked outside the toll plaza range',
-            leaveType: 'OutOfRange', // Provide a valid leaveType here
             regularizationType: 'Out of range',
-            userId,
         });
+
+        // Only apply regularization if it does not already exist
+        if (!existingRegularization) {
+            await attendanceRegularizationService.applyAttendanceRegularization({
+                approverName: 'System',
+                startDate: today,
+                endDate: today,
+                remarks: 'Attendance marked outside the toll plaza range',
+                leaveType: 'OutOfRange', // Provide a valid leaveType here
+                regularizationType: 'Out of range',
+                userId,
+            });
+            console.log('Out-of-range attendance regularization applied.');
+        }
+
+        // Add a recent activity for attendance outside range if it’s punch-in or punch-out
+        const recentActivity = new RecentActivity({
+            userId,
+            activity: `Attendance marked outside the toll plaza range for ${today}.`, // Set the `activity` field to a descriptive message
+            timestamp: new Date()
+        });
+        await recentActivity.save();
+        console.log('Recent activity for out-of-range attendance saved successfully.');
+
         return { message: `Shift ${status} marked successfully. Please regularize your attendance as it is outside the toll plaza range.` };
     }
 
@@ -270,5 +297,90 @@ exports.retrieveAttendanceHistoryByDateRange = async (userId, startDate, endDate
     } catch (error) {
         console.error('Error fetching attendance by date range:', error);
         throw new Error('Error fetching attendance history');
+    }
+};
+
+exports.generateAttendanceReportPDF = async (startDate, endDate, res) => {
+    try {
+        // Fetch all users from the database
+        const users = await User.find({});  // Assumes a User model is defined
+
+        if (users.length === 0) {
+            return res.status(404).json({ message: 'No users found' });
+        }
+
+        console.log('Found users:', users);
+
+        // Create a new PDF document for all users
+        const doc = new PDFDocument();
+
+        // Set the correct content type and disposition to make it downloadable
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.pdf`);
+
+        // Pipe the document to the response stream (not to a file)
+        doc.pipe(res);
+
+        // Document metadata
+        doc.info.Title = 'Attendance History Report';
+        doc.info.Author = 'Your Application';
+
+        // Add a title to the PDF
+        doc.fontSize(18).text('Attendance History Report', { align: 'center' });
+        doc.moveDown();
+
+        // Loop through each user and generate their report
+        for (const user of users) {
+            const userId = user._id.toString();
+
+            // Fetch attendance data for the user
+            const attendanceRecords = await this.getAttendanceByDateRange(userId, startDate, endDate);
+
+            if (!attendanceRecords || attendanceRecords.length === 0) {
+                console.log(`No attendance records found for user: ${userId}`);
+                continue;  // Skip this user if there are no attendance records
+            }
+
+            // Add user name and date range to the PDF
+            doc.fontSize(12).text(`User: ${user.name}`, { align: 'center' });
+            doc.text(`Report for: ${moment(startDate).format('MMMM Do, YYYY')} to ${moment(endDate).format('MMMM Do, YYYY')}`, { align: 'center' });
+            doc.moveDown(2);
+
+            // Table headers
+            doc.fontSize(10).text('Date', 50, doc.y, { width: 100, align: 'left' });
+            doc.text('Punch In', 150, doc.y, { width: 100, align: 'left' });
+            doc.text('Punch Out', 250, doc.y, { width: 100, align: 'left' });
+            doc.text('Present', 350, doc.y, { width: 100, align: 'left' });
+            doc.text('Absent', 450, doc.y, { width: 100, align: 'left' });
+            doc.text('Working Hours', 550, doc.y, { width: 100, align: 'left' });
+            doc.moveDown();
+
+            // Draw line under header
+            doc.moveTo(50, doc.y).lineTo(560, doc.y).stroke();
+            doc.moveDown();
+
+            // Loop through each record and add to the table
+            attendanceRecords.forEach(record => {
+                const { date, punchIn, punchOut, present, absent, totalWorkingHours } = record;
+
+                doc.text(moment(date).format('YYYY-MM-DD'), 50, doc.y, { width: 100 });
+                doc.text(punchIn ? moment(punchIn).format('HH:mm:ss') : 'N/A', 150, doc.y, { width: 100 });
+                doc.text(punchOut ? moment(punchOut).format('HH:mm:ss') : 'N/A', 250, doc.y, { width: 100 });
+                doc.text(present, 350, doc.y, { width: 100 });
+                doc.text(absent, 450, doc.y, { width: 100 });
+                doc.text(totalWorkingHours, 550, doc.y, { width: 100 });
+                doc.moveDown();
+            });
+
+            doc.addPage();  // Start a new page for the next user
+        }
+
+        // Finalize the document
+        doc.end();
+
+        console.log('PDF report generated and sent to the frontend');
+    } catch (error) {
+        console.error('Error generating PDF reports:', error);
+        res.status(500).json({ message: 'Failed to generate PDF reports' });
     }
 };

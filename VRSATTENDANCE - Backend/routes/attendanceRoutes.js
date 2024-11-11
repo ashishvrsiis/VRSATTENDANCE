@@ -8,5 +8,6 @@ router.get('/monthly', authenticateToken, attendanceController.getMonthlyAttenda
 router.post('/mark', authenticateToken, attendanceController.markAttendance);
 router.get('/history', authenticateToken, attendanceController.getAttendanceHistory);
 router.get('/admin/history',authenticateToken, attendanceController.retrieveAttendanceHistory);
+router.get('/attendance-report', attendanceController.getAttendanceReportPDF);
 
 module.exports = router;

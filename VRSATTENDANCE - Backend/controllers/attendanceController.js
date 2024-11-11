@@ -155,3 +155,19 @@ exports.retrieveAttendanceHistory = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
+
+exports.getAttendanceReportPDF = async (req, res) => {
+    try {
+        const { startDate, endDate } = req.query;
+
+        if (!startDate || !endDate) {
+            return res.status(400).json({ message: "Start date and end date are required" });
+        }
+
+        // Call the generateAttendanceReportPDF method from attendanceService
+        await attendanceService.generateAttendanceReportPDF(startDate, endDate, res);
+    } catch (error) {
+        console.error("Error generating attendance report PDF:", error);
+        res.status(500).json({ message: "Failed to generate attendance report PDF" });
+    }
+};
