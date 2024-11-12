@@ -9,5 +9,6 @@ router.post('/mark', authenticateToken, attendanceController.markAttendance);
 router.get('/history', authenticateToken, attendanceController.getAttendanceHistory);
 router.get('/admin/history',authenticateToken, attendanceController.retrieveAttendanceHistory);
 router.get('/attendance-report', attendanceController.getAttendanceReportPDF);
+router.get('/history/all-users', attendanceController.getAllUsersAttendanceHistory);
 
 module.exports = router;

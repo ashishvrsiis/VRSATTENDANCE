@@ -171,3 +171,58 @@ exports.getAttendanceReportPDF = async (req, res) => {
         res.status(500).json({ message: "Failed to generate attendance report PDF" });
     }
 };
+
+exports.getAllUsersAttendanceHistory = async (req, res) => {
+    try {
+        const { startDate, endDate } = req.query;
+
+        if (!startDate || !endDate) {
+            return res.status(400).json({ error: 'Both startDate and endDate are required.' });
+        }
+
+        console.log(`Fetching attendance history for all users, from ${startDate} to ${endDate}`);
+
+        // Retrieve all users from the database
+        const users = await User.find({});
+        if (users.length === 0) {
+            return res.status(404).json({ message: 'No users found' });
+        }
+
+        // Create a result object to store attendance records for each user
+        const result = [];
+
+        // Loop through each user and fetch their attendance history
+        for (const user of users) {
+            const userId = user._id.toString();
+            const userName = user.name;
+            const userEmail = user.email;
+
+            // Fetch attendance data for the user within the date range
+            const attendanceRecords = await attendanceService.getAttendanceByDateRange(userId, startDate, endDate);
+
+            // Format the attendance data to include the user's name, email, and attendance image if available
+            const formattedRecords = attendanceRecords.map(record => ({
+                date: record.date,
+                punchIn: record.punchIn ? moment(record.punchIn).format('HH:mm:ss') : 'N/A',
+                punchOut: record.punchOut ? moment(record.punchOut).format('HH:mm:ss') : 'N/A',
+                present: record.present,
+                absent: record.absent,
+                totalWorkingHours: record.totalWorkingHours,
+                image: record.image || null, // Assumes `image` field in attendance record holds image URL/path
+            }));
+
+            result.push({
+                userId,
+                userName,
+                userEmail,
+                attendance: formattedRecords,
+            });
+        }
+
+        // Send the response with attendance history for all users
+        res.json(result);
+    } catch (error) {
+        console.error('Error fetching attendance history for all users:', error.message);
+        res.status(500).json({ error: error.message });
+    }
+};

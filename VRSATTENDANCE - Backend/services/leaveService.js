@@ -18,6 +18,20 @@ exports.getAllLeaveRequests = async () => {
 exports.getLeaveRequests = async (userId, userRole) => {
   let leaves;
 
+  // Fetch the applier's (current user's) name and managerId (directly from the user's document)
+  const applier = await User.findById(userId).select('name managerId managerName');
+  console.log("Applier details:", applier); // Log to check applier's details
+
+  let managerName = applier.managerName || 'No approver assigned'; // Get managerName directly from the user
+
+  // If the user has a managerId, fetch the manager’s name (only if managerName isn't already available)
+  if (!managerName && applier.managerId) {
+    console.log("Manager ID found:", applier.managerId); // Log managerId if present
+    const manager = await User.findById(applier.managerId).select('name');
+    managerName = manager ? manager.name : 'No approver assigned'; // Assign manager name if available
+    console.log("Fetched Manager Details:", manager); // Log to check fetched manager details
+  }
+
   if (userRole === 1 || userRole === 2) {
     // Super admin (1) or admin (2): Retrieve all leave requests
     leaves = await Leave.find({});
@@ -37,7 +51,7 @@ exports.getLeaveRequests = async (userId, userRole) => {
     leaves = await Leave.find({ employeeId: userId });
   }
 
-  // Add a professional message to each leave request and format the dates in Indian format
+  // Process each leave request
   const leavesWithMessages = leaves.map(leave => {
     let approvalMessage = '';
 
@@ -63,15 +77,18 @@ exports.getLeaveRequests = async (userId, userRole) => {
     }
 
     return {
-      ...leave._doc, // Spread leave data into the new object
+      ...leave._doc,
       startDate: formattedStartDate,
       endDate: formattedEndDate,
       customApprovedStartDate: customStartDate,
       customApprovedEndDate: customEndDate,
-      message: approvalMessage // Add the approval message
+      message: approvalMessage,
+      applierName: applier?.name || 'Unknown',
+      approverName: managerName // Directly use managerName from the current user's document or fallback message
     };
   });
 
+  console.log("Final Leave Requests with Messages:", leavesWithMessages); // Log final output
   return leavesWithMessages;
 };
 
