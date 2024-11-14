@@ -26,6 +26,7 @@ const { authenticateUser } = require('./middleware/authenticateToken');
 const holidayRoutes = require('./routes/holidayRoutes');
 const locationRoutes = require('./routes/locationRoutes');
 const tollRoutes = require('./routes/tollRoutes');
+const pdfRoutes = require("./routes/pdfRoutes");
 
 dotenv.config();
 
@@ -58,6 +59,7 @@ app.use('/api/v1/password-management', passwordRoutes);
 app.use('/api/holidays', holidayRoutes);
 app.use('/api/location', locationRoutes);
 app.use('/api/v1', tollRoutes);
+app.use("/api/v1", pdfRoutes);
 
 const server = http.createServer(app);
 
