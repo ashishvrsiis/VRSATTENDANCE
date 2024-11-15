@@ -18,20 +18,7 @@ exports.getAllLeaveRequests = async () => {
 exports.getLeaveRequests = async (userId, userRole) => {
   let leaves;
 
-  // Fetch the applier's (current user's) name and managerId (directly from the user's document)
-  const applier = await User.findById(userId).select('name managerId managerName');
-  console.log("Applier details:", applier); // Log to check applier's details
-
-  let managerName = applier.managerName || 'No approver assigned'; // Get managerName directly from the user
-
-  // If the user has a managerId, fetch the manager’s name (only if managerName isn't already available)
-  if (!managerName && applier.managerId) {
-    console.log("Manager ID found:", applier.managerId); // Log managerId if present
-    const manager = await User.findById(applier.managerId).select('name');
-    managerName = manager ? manager.name : 'No approver assigned'; // Assign manager name if available
-    console.log("Fetched Manager Details:", manager); // Log to check fetched manager details
-  }
-
+  // Retrieve leave requests based on user role
   if (userRole === 1 || userRole === 2) {
     // Super admin (1) or admin (2): Retrieve all leave requests
     leaves = await Leave.find({});
@@ -52,44 +39,58 @@ exports.getLeaveRequests = async (userId, userRole) => {
   }
 
   // Process each leave request
-  const leavesWithMessages = leaves.map(leave => {
-    let approvalMessage = '';
+  const leavesWithDetails = await Promise.all(
+    leaves.map(async leave => {
+      // Fetch the applier's details using employeeId
+      const applier = await User.findById(leave.employeeId).select('name managerId');
+      const applierName = applier?.name || 'Unknown';
 
-    const formattedStartDate = format(new Date(leave.startDate), 'dd-MM-yyyy');
-    const formattedEndDate = format(new Date(leave.endDate), 'dd-MM-yyyy');
-    const customStartDate = leave.customApprovedStartDate
-      ? format(new Date(leave.customApprovedStartDate), 'dd-MM-yyyy')
-      : null;
-    const customEndDate = leave.customApprovedEndDate
-      ? format(new Date(leave.customApprovedEndDate), 'dd-MM-yyyy')
-      : null;
-
-    if (leave.status === 'Approved') {
-      if (leave.customApprovedStartDate && leave.customApprovedEndDate) {
-        approvalMessage = `Your leave has been approved for the custom period from ${customStartDate} to ${customEndDate}.`;
-      } else {
-        approvalMessage = `Your leave has been fully approved from ${formattedStartDate} to ${formattedEndDate}.`;
+      // Fetch the manager (approver) name of the applier
+      let approverName = 'No approver assigned';
+      if (applier?.managerId) {
+        const manager = await User.findById(applier.managerId).select('name');
+        approverName = manager?.name || 'No approver assigned';
       }
-    } else if (leave.status === 'Pending') {
-      approvalMessage = 'Your leave request is pending approval.';
-    } else if (leave.status === 'Rejected') {
-      approvalMessage = `Your leave request was rejected. Reason: ${leave.rejectionReason || 'No reason provided'}.`;
-    }
 
-    return {
-      ...leave._doc,
-      startDate: formattedStartDate,
-      endDate: formattedEndDate,
-      customApprovedStartDate: customStartDate,
-      customApprovedEndDate: customEndDate,
-      message: approvalMessage,
-      applierName: applier?.name || 'Unknown',
-      approverName: managerName // Directly use managerName from the current user's document or fallback message
-    };
-  });
+      // Format dates
+      const formattedStartDate = format(new Date(leave.startDate), 'dd-MM-yyyy');
+      const formattedEndDate = format(new Date(leave.endDate), 'dd-MM-yyyy');
+      const customStartDate = leave.customApprovedStartDate
+        ? format(new Date(leave.customApprovedStartDate), 'dd-MM-yyyy')
+        : null;
+      const customEndDate = leave.customApprovedEndDate
+        ? format(new Date(leave.customApprovedEndDate), 'dd-MM-yyyy')
+        : null;
 
-  console.log("Final Leave Requests with Messages:", leavesWithMessages); // Log final output
-  return leavesWithMessages;
+      // Generate the appropriate message
+      let approvalMessage = '';
+      if (leave.status === 'Approved') {
+        if (customStartDate && customEndDate) {
+          approvalMessage = `Your leave has been approved for the custom period from ${customStartDate} to ${customEndDate}.`;
+        } else {
+          approvalMessage = `Your leave has been fully approved from ${formattedStartDate} to ${formattedEndDate}.`;
+        }
+      } else if (leave.status === 'Pending') {
+        approvalMessage = 'Your leave request is pending approval.';
+      } else if (leave.status === 'Rejected') {
+        approvalMessage = `Your leave request was rejected. Reason: ${leave.rejectionReason || 'No reason provided'}.`;
+      }
+
+      // Return the processed leave object
+      return {
+        ...leave._doc,
+        startDate: formattedStartDate,
+        endDate: formattedEndDate,
+        customApprovedStartDate: customStartDate,
+        customApprovedEndDate: customEndDate,
+        message: approvalMessage,
+        applierName,
+        approverName // Now reflects the manager of the applier
+      };
+    })
+  );
+
+  return leavesWithDetails;
 };
 
 // Get leave requests for a manager, including their own and their employees' leave requests
