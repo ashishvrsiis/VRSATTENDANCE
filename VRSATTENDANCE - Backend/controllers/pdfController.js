@@ -1,16 +1,19 @@
 const emailService = require("../services/emailService");
 
-const sendPDF = async (req, res) => {
+const sendFile = async (req, res) => {
   try {
-    const { email } = req.body;
-    const pdfFile = req.file;
+    const { email, subject, name, message } = req.body;
+    const file = req.file;
 
-    if (!email || !pdfFile) {
-      return res.status(400).json({ message: "Email and PDF file are required" });
+    if (!email || !file) {
+      return res.status(400).json({ message: "Email and file are required" });
     }
 
+    // Determine file type from MIME type
+    const fileType = file.mimetype === "application/pdf" ? "pdf" : "csv";
+
     // Call email service to send the email with attachment
-    await emailService.sendEmailWithPDF(email, pdfFile);
+    await emailService.sendEmailWithAttachment(email, file, { subject, name, message, fileType });
 
     res.status(200).json({ message: "Email sent successfully" });
   } catch (error) {
@@ -19,5 +22,5 @@ const sendPDF = async (req, res) => {
 };
 
 module.exports = {
-  sendPDF,
+  sendFile,
 };

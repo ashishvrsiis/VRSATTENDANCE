@@ -6,57 +6,78 @@
   <title>{{subject}}</title>
   <style>
     body {
-      font-family: Arial, sans-serif;
-      color: #333;
-      background-color: #f4f4f4;
+      font-family: 'Arial', sans-serif;
+      background-color: #F7A832; /* Orange background */
+      color: #25325F; /* Dark blue text */
       padding: 20px;
+      margin: 0;
     }
     .container {
       width: 80%;
-      margin: 0 auto;
+      max-width: 600px;
+      margin: 20px auto;
       background-color: #ffffff;
-      padding: 20px;
-      border-radius: 5px;
-      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+      padding: 25px;
+      border-radius: 8px;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
     }
     h1 {
-      color: #0044cc;
+      color: #25325F; /* Dark blue heading */
+      font-size: 28px;
+      border-bottom: 2px solid #F7A832; /* Orange underline */
+      display: inline-block;
+      padding-bottom: 5px;
     }
     p {
       font-size: 16px;
-      line-height: 1.6;
+      line-height: 1.8;
+      margin: 15px 0;
+      color: #25325F; /* Dark blue text */
     }
     .footer {
       text-align: center;
       margin-top: 30px;
-      font-size: 12px;
-      color: #777;
+      font-size: 13px;
+      color: #25325F; /* Dark blue footer text */
     }
     .button {
       display: inline-block;
-      background-color: #007bff;
-      color: #fff;
-      padding: 10px 20px;
+      background-color: #25325F; /* Dark blue button */
+      color: #F7A832; /* Orange button text */
+      padding: 12px 25px;
       text-decoration: none;
-      border-radius: 5px;
+      font-size: 16px;
+      font-weight: bold;
+      border-radius: 25px;
       margin-top: 20px;
+      transition: background-color 0.3s ease;
     }
     .button:hover {
-      background-color: #0056b3;
+      background-color: #1f284d; /* Slightly darker blue for hover effect */
+    }
+    .header {
+      text-align: center;
+      background-color: #25325F; /* Dark blue header */
+      color: #F7A832; /* Orange header text */
+      padding: 15px;
+      border-radius: 8px 8px 0 0;
+      font-size: 18px;
+      font-weight: bold;
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>{{subject}}</h1>
-    <p>Dear {{name}},</p>
+    <div class="header">
+      {{subject}}
+    </div>
+    <h1>Hello, {{name}}</h1>
     <p>{{message}}</p>
-    <p>Please find the attached PDF document for your reference.</p>
-    <a href="{{link}}" class="button">{{buttonText}}</a>
+    <!-- <a href="#" class="button">Take Action</a> -->
     
     <div class="footer">
       <p>Best regards,</p>
-      <p>Your Company Name</p>
+      <p>VRS INTELLIGENT INNVOVATIVE SYSTEM PVT LTD.</p>
     </div>
   </div>
 </body>
