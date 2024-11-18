@@ -1,29 +1,73 @@
 const AttendanceRegularization = require('../models/AttendanceRegularization');
+const User = require('../models/User');
 
 class AttendanceRegularizationService {
   async getAttendanceList(user) {
-    let filter = {};
+    try {
+      let filter = {};
+      console.log('Start of getAttendanceList');
 
-    if (user.role === 1 || user.role === 2) {
-        // If super admin or admin, fetch all attendance records
-        filter = {}; // No filter needed for super admin or admin
-    } else if (user.role === 3) {
-        // If user, check if they are a manager
-        const manager = await User.findOne({ _id: user.id }).populate('managedUsers'); // Populate the users they manage
+      // Log the user details
+      console.log('User Info:', JSON.stringify(user, null, 2));
+
+      // Determine the filter based on the user's role
+      if (user.role === 1 || user.role === 2) {
+        console.log('User is admin or super admin. Fetching all attendance records.');
+        filter = {};
+      } else if (user.role === 3) {
+        console.log('User is manager or regular user. Checking managed users.');
+        const manager = await User.findOne({ _id: user.id }).populate('managedUsers');
+        console.log('Manager Info:', JSON.stringify(manager, null, 2));
 
         if (manager && manager.managedUsers && manager.managedUsers.length > 0) {
-            // User is a manager, fetch attendance records for users they manage
-            filter = { user: { $in: manager.managedUsers.map(u => u._id) } };
+          console.log('Manager has managed users. Fetching records for managed users.');
+          filter = { user: { $in: manager.managedUsers.map(u => u._id) } };
         } else {
-            // User is not a manager, fetch only their own attendance records
-            filter = { user: user.id };
+          console.log('Manager has no managed users. Fetching own records.');
+          filter = { user: user.id };
         }
-    }
+      }
 
-    return AttendanceRegularization.find(filter) // Apply the filter based on the user's role
-        .populate('user', 'name') // Populate the `name` field from the User model
+      console.log('Filter Applied:', JSON.stringify(filter, null, 2));
+
+      // Fetch attendance records with detailed population
+      const attendanceRecords = await AttendanceRegularization.find(filter)
+        .populate({
+          path: 'user',
+          select: 'name email managerId',
+          populate: {
+            path: 'managerId',
+            select: 'name email _id',
+          },
+        })
         .sort({ startDate: -1 });
-}
+
+      console.log('Fetched Attendance Records:', JSON.stringify(attendanceRecords, null, 2));
+
+      // Enhance records with manager details
+      const enhancedRecords = attendanceRecords.map(record => {
+        const user = record.user;
+        const manager = user ? user.managerId : null;
+
+        console.log('Processing Record:', JSON.stringify(record, null, 2));
+        console.log('User Info:', JSON.stringify(user, null, 2));
+        console.log('Manager Info:', JSON.stringify(manager, null, 2));
+
+        return {
+          ...record.toObject(),
+          managerId: manager ? manager._id : null,
+          managerName: manager ? manager.name : 'N/A',
+          managerEmail: manager ? manager.email : 'N/A',
+        };
+      });
+
+      console.log('Enhanced Records:', JSON.stringify(enhancedRecords, null, 2));
+      return enhancedRecords;
+    } catch (error) {
+      console.error('Error in getAttendanceList service:', error);
+      throw new Error('Error fetching attendance list');
+    }
+  }
 
   async applyAttendanceRegularization(data) {
     // Ensure the `user` field is correctly set
