@@ -10,6 +10,10 @@ class AttendanceRegularizationService {
       // Log the user details
       console.log('User Info:', JSON.stringify(user, null, 2));
 
+      const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
+
       // Determine the filter based on the user's role
       if (user.role === 1 || user.role === 2) {
         console.log('User is admin or super admin. Fetching all attendance records.');
@@ -79,6 +83,10 @@ class AttendanceRegularizationService {
 }
 
   async updateAttendanceStatus(id, status, user, reason) {
+
+    const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
     // Ensure the authenticated user owns the attendance record
     return AttendanceRegularization.findOneAndUpdate(
       { _id: id, userId: user.id },

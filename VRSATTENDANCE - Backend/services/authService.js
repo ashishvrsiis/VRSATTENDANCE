@@ -8,7 +8,7 @@ const { sendNotificationEmail } = require('./passwordChangeEmailService');
 
 
 
-const registerUser = async (userData) => {
+const registerUser = async (userData, currentUser) => {
     const {
         name,
         email,
@@ -18,21 +18,19 @@ const registerUser = async (userData) => {
         phone,
         dateOfBirth,
         position,
-        managerEmail, // Manager's email input by the user
+        managerEmail,
         managerRole,
         workLocation,
         website,
         employeeId
     } = userData;
 
-    if (!employeeId || employeeId.trim() === "") {
-        throw new Error('Employee ID is required');
-    }
-
+    // Validate passwords match
     if (password !== re_password) {
         throw new Error('Passwords do not match');
     }
 
+    // Ensure email and employee ID are unique
     const userExists = await User.findOne({ email });
     if (userExists) {
         throw new Error('User already exists');
@@ -43,16 +41,43 @@ const registerUser = async (userData) => {
         throw new Error('Employee ID already exists');
     }
 
-    // Validate managerEmail and retrieve manager details
+    // Check current user's role and manager status
+    const currentUserRole = currentUser.role;
+    const isManagerTrue = currentUser.manager; // True or False, set from token or DB
+
+    if (currentUserRole === 1) {
+        // Super Admin can register roles 2 (Admin) and 3 (Managers/Employees)
+        if (![2, 3].includes(role)) {
+            throw new Error('Super Admin can only register Admins and Managers/Employees');
+        }
+    } else if (currentUserRole === 2) {
+        // Admin can register only role 3 (Managers/Employees)
+        if (role !== 3) {
+            throw new Error('Admins can only register Managers/Employees');
+        }
+    } else if (currentUserRole === 3) {
+        // Managers
+        if (!isManagerTrue) {
+            throw new Error('Access denied. Only managers with the appropriate permissions can register new accounts.');
+        }
+        if (role !== 3) {
+            throw new Error('Managers can only register Managers with "manager: false"');
+        }
+    } else {
+        throw new Error('Unauthorized role for registration');
+    }
+
+    // Handle manager assignment
     let managerId = null;
     if (managerEmail) {
-        const manager = await User.findOne({ email: managerEmail, role: 3 }); // Assuming role 3 is for managers
+        const manager = await User.findOne({ email: managerEmail, role: 3 });
         if (!manager) {
             throw new Error('Manager not found');
         }
         managerId = manager._id;
     }
 
+    // Create the user
     const user = new User({
         name,
         email,
@@ -62,23 +87,24 @@ const registerUser = async (userData) => {
         dateOfBirth,
         position,
         managerId,
-        managerEmail, // Store the manager's email
+        managerEmail,
         managerRole,
         workLocation,
         website,
         employeeId,
-        isApproved: false, // Account needs to be approved by admin
-        isEmailVerified: false // Email verification needed
+        isApproved: false,
+        isEmailVerified: false
     });
 
+    // Save user to the database
     await user.save();
 
-    // Notify admins about the pending account approval
-    await notifyAdmins(user);
+    // Notify admins if necessary
+    if ([1, 2].includes(currentUserRole)) {
+        await notifyAdmins(user);
+    }
 
-    // TODO: Send email verification link to the user
-
-    return { message: 'Registration successful, pending email verification and admin approval' };
+    return { message: 'User registered successfully. Awaiting approval and verification.' };
 };
 
 // Helper function to notify admins about new user registration

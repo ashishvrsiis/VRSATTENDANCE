@@ -10,6 +10,10 @@ exports.getTodayAttendance = async (req, res) => {
         console.log('Controller - userId:', userId); // Log userId
         console.log('Controller - today:', today); // Log today's date
 
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
+
         if (!userId) {
             return res.status(400).json({ error: 'User ID is missing' });
         }
@@ -24,6 +28,10 @@ exports.getTodayAttendance = async (req, res) => {
 
 exports.getMonthlyAttendance = async (req, res) => {
     try {
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
         // Verify the user ID from the token
         const userId = req.user.userId;
         if (!userId) {
@@ -87,6 +95,10 @@ exports.markAttendance = async (req, res) => {
     console.log('Controller - status:', status);
     console.log('Controller - data:', { latitude, longitude, image });
 
+    const managers = await User.find({ role: 3 });
+    console.log(managers); // All managers with the updated 'manager' field
+
+
     try {
         const response = await attendanceService.markAttendance(userId, today, status, { latitude, longitude, image });
         res.json(response);
@@ -100,6 +112,10 @@ exports.getAttendanceHistory = async (req, res) => {
     try {
         const userId = req.user.userId;
         const { startDate, endDate } = req.query;
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
 
         if (!userId) {
             return res.status(400).json({ error: 'User ID is missing.' });
@@ -127,6 +143,9 @@ exports.retrieveAttendanceHistory = async (req, res) => {
         const currentUser = req.user; // Get the current user from the request
         const targetUserId = req.query.userId;
         const { startDate, endDate } = req.query;
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
 
         if (!targetUserId) {
             return res.status(400).json({ error: 'Target User ID is required.' });
@@ -160,6 +179,9 @@ exports.getAttendanceReportPDF = async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
 
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
         if (!startDate || !endDate) {
             return res.status(400).json({ message: "Start date and end date are required" });
         }
@@ -175,6 +197,10 @@ exports.getAttendanceReportPDF = async (req, res) => {
 exports.getAllUsersAttendanceHistory = async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
 
         if (!startDate || !endDate) {
             return res.status(400).json({ error: 'Both startDate and endDate are required.' });

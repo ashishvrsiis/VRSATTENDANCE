@@ -4,6 +4,10 @@ const mongoose = require('mongoose');
 exports.getUserById = async (userId) => {
     const user = await User.findById(userId);
 
+    const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
+
     if (user && user.managerEmail) {
         const manager = await User.findOne({ email: user.managerEmail });
         if (manager) {
@@ -15,6 +19,10 @@ exports.getUserById = async (userId) => {
 };
 
 exports.updateUserProfile = async (userId, profileData) => {
+
+    const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
     // Directly use userId without ObjectId conversion for testing
     return await User.findByIdAndUpdate(userId, profileData, { new: true });
 };
@@ -34,6 +42,10 @@ exports.assignManager = async (userId, managerId, managerRole) => {
     try {
         // Fetch the manager's details based on managerId
         const manager = await User.findById(managerId).select('name email');
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
 
         if (!manager) {
             throw new Error('Manager not found');
@@ -102,6 +114,10 @@ exports.deleteUser = async (userId, requester) => {
 
 exports.editUser = async (userId, updateData, requester) => {
     const userToEdit = await User.findById(userId);
+
+    const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
 
     if (!userToEdit) {
         throw new Error('User not found');

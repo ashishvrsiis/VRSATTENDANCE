@@ -3,7 +3,7 @@ const authController = require('../controllers/authController');
 const authenticateToken = require('../middleware/authenticateToken');
 const router = express.Router();
 
-router.post('/register', authController.register);
+router.post('/register', authenticateToken, authController.register);
 router.post('/token', authController.login);
 router.get('/pending-registrations', authenticateToken, authController.getPendingRegistrations);
 

@@ -36,9 +36,11 @@ const authenticateToken = async (req, res, next) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
+        // Populate req.user with necessary fields, including 'manager'
         req.user = {
             userId: user._id,
             role: user.role,
+            manager: user.manager, // Include the 'manager' field
             tokenType: decoded.tokenType
         };
 

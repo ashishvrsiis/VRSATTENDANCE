@@ -16,6 +16,10 @@ exports.getTodayAttendance = async (userId, date) => {
     try {
         console.log('Querying for userId:', userId, 'and date:', date); // Log query parameters
 
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
+
         // Convert userId to ObjectId
         const userObjectId = new mongoose.Types.ObjectId(userId);
 
@@ -31,6 +35,9 @@ exports.getTodayAttendance = async (userId, date) => {
 exports.getMonthlyAttendance = async (userId, startOfMonth, endOfMonth) => {
     try {
         console.log(`Fetching attendance records for userId: ${userId}, date range: ${startOfMonth} to ${endOfMonth}`);
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
 
         // Fetch attendance records for the given user and date range
         const records = await Attendance.find({
@@ -69,6 +76,9 @@ const getDistanceFromLatLonInKm = (lat1, lon1, lat2, lon2) => {
 
 exports.markAttendance = async (userId, today, status, data) => {
     console.log(`markAttendance called with userId: ${userId}, date: ${today}, status: ${status}, data:`, data);
+
+    const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
 
     // Validate status
     if (status !== 'start' && status !== 'end') {
@@ -179,6 +189,9 @@ exports.getAttendanceByDateRange = async (userId, startDate, endDate) => {
     try {
         console.log(`Fetching attendance records for userId: ${userId}, date range: ${startDate} to ${endDate}`);
 
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
         // Convert userId to ObjectId
         const userObjectId = new mongoose.Types.ObjectId(userId);
 
@@ -255,6 +268,9 @@ exports.retrieveAttendanceHistoryByDateRange = async (userId, startDate, endDate
         // Convert userId to ObjectId
         const userObjectId = new mongoose.Types.ObjectId(userId);
 
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
         // Fetch attendance records for the given user and date range
         const records = await Attendance.find({
             userId: userObjectId,
@@ -310,6 +326,10 @@ exports.generateAttendanceReportPDF = async (startDate, endDate, res) => {
         }
 
         console.log('Found users:', users);
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
 
         // Create a new PDF document for all users
         const doc = new PDFDocument();

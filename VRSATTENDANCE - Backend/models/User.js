@@ -23,6 +23,7 @@ const userSchema = new mongoose.Schema({
     isEmailVerified: { type: Boolean, default: false },
     otp: { type: String },
     otpExpires: { type: Date },
+    manager: { type: Boolean, default: false },
 });
 
 
@@ -40,6 +41,29 @@ userSchema.pre('save', async function (next) {
 userSchema.methods.matchPassword = async function (enteredPassword) {
     return await bcrypt.compare(enteredPassword, this.password);
 };
+
+// Post-find middleware to update manager field
+userSchema.post('find', async function (docs) {
+    for (const doc of docs) {
+        if (doc.role === 3) {
+            const isAssignedAsManager = await mongoose.model('User').exists({ managerEmail: doc.email });
+            if (doc.manager !== !!isAssignedAsManager) {
+                doc.manager = !!isAssignedAsManager;
+                await doc.save(); // Save updated manager field
+            }
+        }
+    }
+});
+
+userSchema.post('findOne', async function (doc) {
+    if (doc && doc.role === 3) {
+        const isAssignedAsManager = await mongoose.model('User').exists({ managerEmail: doc.email });
+        if (doc.manager !== !!isAssignedAsManager) {
+            doc.manager = !!isAssignedAsManager;
+            await doc.save(); // Save updated manager field
+        }
+    }
+});
 
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 module.exports = User;

@@ -7,6 +7,10 @@ exports.getUserProfile = async (req, res) => {
         const userId = req.user.userId; // Use userId from the token payload
         const user = await userService.getUserById(userId);
 
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
+
         if (user) {
             res.json({
                 id: user._id,
@@ -75,6 +79,10 @@ exports.updateUserProfile = async (req, res) => {
 
         const user = await userService.updateUserProfile(userId, updateData);
 
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
+
         if (user) {
             res.json({ message: 'Profile updated successfully.', user });
         } else {
@@ -113,6 +121,10 @@ exports.updateEmployeeIdForUser = async (req, res) => {
         // Update the target user with the new employeeId
         const updatedUser = await userService.updateEmployeeId(targetUserId, employeeId);
 
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
+
         if (updatedUser) {
             res.json({ message: 'Employee ID updated successfully', user: updatedUser });
         } else {
@@ -140,6 +152,10 @@ exports.assignManager = async (req, res) => {
         // Assign manager to user
         const updatedUser = await userService.assignManager(userId, managerId, managerRole);
 
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
+
         if (updatedUser) {
             res.json({ message: 'Manager assigned successfully', user: updatedUser });
         } else {
@@ -157,6 +173,9 @@ exports.checkEmail = async (req, res) => {
         if (!email) {
             return res.status(400).json({ message: 'Email is required' });
         }
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
 
         const exists = await userService.emailExists(email);
         res.status(200).json({ emailExists: exists });
@@ -177,6 +196,10 @@ exports.getAllUsers = async (req, res) => {
         // Fetch all users
         const users = await User.find();
         res.status(200).json(users);
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
     } catch (error) {
         console.error('Error fetching users:', error);
         res.status(500).json({ error: 'Error fetching users' });
@@ -196,6 +219,10 @@ exports.searchUsers = async (req, res) => {
         }
 
         res.status(200).json(users);
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
     } catch (error) {
         console.error('Error searching users:', error);
         res.status(500).json({ message: 'Server error' });
@@ -209,6 +236,10 @@ exports.deleteUser = async (req, res) => {
 
         const deletedUser = await userService.deleteUser(req.params.id, req.user);
         res.status(200).json({ message: 'User deleted successfully', deletedUser });
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
     } catch (error) {
         console.error('Error Deleting User:', error.message); // Log error details
         res.status(403).json({ message: error.message });
@@ -219,6 +250,10 @@ exports.editUser = async (req, res) => {
     try {
         const updatedUser = await userService.editUser(req.params.id, req.body, req.user);
         res.status(200).json({ message: 'User updated successfully', updatedUser });
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
     } catch (error) {
         res.status(403).json({ message: error.message });
     }

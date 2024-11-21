@@ -9,10 +9,14 @@ const { sendNotificationEmail } = require('../services/registrationemailService'
 
 const register = async (req, res) => {
     try {
-        const userData = req.body;
-        const response = await authService.registerUser(userData);
+        const currentUser = req.user; // Get the current user's role and manager status
+        const userData = req.body; // New user data from request body
+
+        // Pass currentUser to the service for role-based logic
+        const response = await authService.registerUser(userData, currentUser);
         res.status(201).json(response);
     } catch (error) {
+        console.error('Registration error:', error.message);
         res.status(400).json({ message: error.message });
     }
 };
@@ -22,6 +26,10 @@ const login = async (req, res) => {
         const { email, password } = req.body;
         const response = await authService.loginUser(email, password);
         res.status(200).json(response);
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
     } catch (error) {
         res.status(400).json({ message: error.message });
     }
@@ -32,6 +40,10 @@ const verifyLoginOtp = async (req, res) => {
         const { email, otp } = req.body;
         const response = await authService.verifyLoginOtp(email, otp);
         res.status(200).json(response);
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
     } catch (error) {
         res.status(400).json({ message: error.message });
     }
@@ -48,6 +60,10 @@ const getPendingRegistrations = async (req, res) => {
         const pendingUsers = await User.find({ isApproved: false });
         console.log('Pending users:', pendingUsers);
         res.status(200).json(pendingUsers);
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
     } catch (error) {
         console.log('Error fetching pending registrations:', error);
         res.status(500).json({ message: error.message });
@@ -80,6 +96,10 @@ const approveRegistration = async (req, res) => {
         });
 
         res.status(200).json({ message: 'User approved successfully' });
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
     } catch (error) {
         console.log('Error approving registration:', error);
         res.status(500).json({ message: error.message });
@@ -111,6 +131,10 @@ const rejectRegistration = async (req, res) => {
         });
 
         res.status(200).json({ message: 'User rejected successfully' });
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
     } catch (error) {
         console.log('Error rejecting registration:', error);
         res.status(500).json({ message: error.message });
@@ -139,6 +163,10 @@ const requestOtp = async (req, res) => {
         });
 
         res.status(200).json({ message: 'OTP sent to your email address' });
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -158,6 +186,10 @@ const verifyOtp = async (req, res) => {
         await user.save();
 
         res.status(200).json({ message: 'Email verified successfully' });
+
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
     } catch (error) {
         res.status(400).json({ message: error.message });
     }

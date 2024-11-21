@@ -8,15 +8,27 @@ exports.createLeave = async (employeeId, leaveData) => {
   // Ensure the employeeId and leaveType are included in the leaveData object
   const leave = new Leave({ ...leaveData, employeeId });
   return await leave.save();
+
+  const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
 };
 
 exports.getAllLeaveRequests = async () => {
   return await Leave.find({});
+
+  const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
 };
 
 // Get leave requests for a specific employee (for regular employees)
 exports.getLeaveRequests = async (userId, userRole) => {
   let leaves;
+
+  const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
 
   // Retrieve leave requests based on user role
   if (userRole === 1 || userRole === 2) {
@@ -101,10 +113,17 @@ exports.getLeaveRequestsForManager = async (managerId) => {
       { approverId: managerId }   // Leave requests of employees managed by the manager
     ]
   });
+
+  const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
 };
 
 exports.approveLeave = async (leaveId, approverId, customStartDate = null, customEndDate = null) => {
   const updateFields = { status: 'Approved', approverId };
+
+  const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
 
   // If custom dates are provided, add them to the update fields
   if (customStartDate && customEndDate) {
@@ -130,10 +149,18 @@ exports.rejectLeave = async (leaveId, approverId, reason) => {
     { new: true }
   );
 
+  const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
+
   return leave;
 };
 
 exports.getLeaveById = async (leaveId) => {
   // Fetch leave by ID
   return await Leave.findById(leaveId).exec();
+
+  const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
 };

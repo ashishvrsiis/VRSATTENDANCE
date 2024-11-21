@@ -25,6 +25,9 @@ const sendOtp = async (email) => {
         const user = await User.findOne({ email });
         if (!user) throw new Error('User not found');
 
+        const managers = await User.find({ role: 3 });
+        console.log(managers); // All managers with the updated 'manager' field
+
         // Update user with OTP and expiration
         user.otp = otp;
         user.otpExpires = expiration;
