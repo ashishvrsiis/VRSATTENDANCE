@@ -9,6 +9,8 @@ const { sendNotificationEmail } = require('./passwordChangeEmailService');
 
 
 const registerUser = async (userData, currentUser) => {
+    console.log('registerUser invoked with userData:', userData);
+    console.log('Current user details:', currentUser);
     const {
         name,
         email,
@@ -25,59 +27,94 @@ const registerUser = async (userData, currentUser) => {
         employeeId
     } = userData;
 
+    try {
     // Validate passwords match
     if (password !== re_password) {
+        console.error('Password mismatch: password and re_password do not match');
         throw new Error('Passwords do not match');
     }
+    console.log('Passwords match');
 
     // Ensure email and employee ID are unique
     const userExists = await User.findOne({ email });
     if (userExists) {
+        console.error(`Email already exists: ${email}`);
         throw new Error('User already exists');
     }
+    console.log('Email is unique');
 
     const employeeIdExists = await User.findOne({ employeeId });
     if (employeeIdExists) {
+        console.error(`Employee ID already exists: ${employeeId}`);
         throw new Error('Employee ID already exists');
     }
+    console.log('Employee ID is unique');
 
     // Check current user's role and manager status
     const currentUserRole = currentUser.role;
     const isManagerTrue = currentUser.manager; // True or False, set from token or DB
+    console.log('Current user role:', currentUserRole);
+    console.log('Is manager:', isManagerTrue);
 
     if (currentUserRole === 1) {
         // Super Admin can register roles 2 (Admin) and 3 (Managers/Employees)
+        console.log('Super Admin attempting to register a user');
         if (![2, 3].includes(role)) {
+            console.error('Super Admin attempted to register an invalid role:', role);
             throw new Error('Super Admin can only register Admins and Managers/Employees');
         }
     } else if (currentUserRole === 2) {
         // Admin can register only role 3 (Managers/Employees)
+        console.log('Admin attempting to register a user');
         if (role !== 3) {
+            console.error('Admin attempted to register an invalid role:', role);
             throw new Error('Admins can only register Managers/Employees');
         }
     } else if (currentUserRole === 3) {
         // Managers
+        console.log('Manager attempting to register a user');
         if (!isManagerTrue) {
+            console.error('Manager does not have sufficient permissions (manager=false)');
             throw new Error('Access denied. Only managers with the appropriate permissions can register new accounts.');
         }
         if (role !== 3) {
+            console.error('Manager attempted to register an invalid role:', role);
             throw new Error('Managers can only register Managers with "manager: false"');
         }
+        if (userData.manager) {
+            console.error('Manager attempted to register another manager with "manager: true"');
+            throw new Error('Managers cannot create other managers with "manager: true".');
+        }
     } else {
+        console.error('Unauthorized user role attempting to register a user:', currentUserRole);
         throw new Error('Unauthorized role for registration');
     }
 
     // Handle manager assignment
     let managerId = null;
     if (managerEmail) {
+        console.log('Checking manager assignment for email:', managerEmail);
         const manager = await User.findOne({ email: managerEmail, role: 3 });
         if (!manager) {
+            console.error('Manager not found with email:', managerEmail);
             throw new Error('Manager not found');
         }
+        console.log('Manager found:', manager);
         managerId = manager._id;
     }
 
     // Create the user
+
+    console.log('Creating new user with the following data:', {
+        name,
+        email,
+        role,
+        phone,
+        position,
+        managerId,
+        workLocation
+    });
+
     const user = new User({
         name,
         email,
@@ -97,14 +134,23 @@ const registerUser = async (userData, currentUser) => {
     });
 
     // Save user to the database
+    console.log('Saving user to database...');
     await user.save();
+    console.log('User saved successfully:', user);
 
     // Notify admins if necessary
     if ([1, 2].includes(currentUserRole)) {
+        console.log('Notifying admins for new user registration');
         await notifyAdmins(user);
     }
 
+    console.log('Registration process completed successfully');
+
     return { message: 'User registered successfully. Awaiting approval and verification.' };
+} catch (error) {
+    console.error('Error during user registration:', error.message);
+    throw error; // Re-throw the error to be handled by the calling function
+}
 };
 
 // Helper function to notify admins about new user registration
@@ -154,38 +200,9 @@ const sendOtpEmail = async (email, name, otp) => {
 };
 
 //Original code with otp
-// const loginUser = async (email, password) => {
-//     const user = await User.findOne({ email });
-
-//     if (!user) {
-//         throw new Error('User not found.');
-//     }
-
-//     // Compare the password with the hashed password in the database
-//     const isMatch = await bcrypt.compare(password, user.password); 
-//     if (!isMatch) {
-//         throw new Error('Invalid credentials');
-//     }
-
-//     if (!user.isApproved) {
-//         throw new Error('User account is not approved yet');
-//     }
-
-//     const otp = generateOTP();
-//     user.otp = otp;
-//     user.otpExpires = Date.now() + 10 * 60 * 1000; // OTP valid for 10 minutes
-//     await user.save();
-
-//     // Pass the user's name to the email template
-//     await sendOtpEmail(user.email, user.name, otp);
-
-//     return { message: 'OTP sent to your email' };
-// };
-
-//Bypass otp temporary code
 const loginUser = async (email, password) => {
     const user = await User.findOne({ email });
-    
+
     if (!user) {
         throw new Error('User not found.');
     }
@@ -200,31 +217,60 @@ const loginUser = async (email, password) => {
         throw new Error('User account is not approved yet');
     }
 
-    // Generate a new OTP and its expiration time
-    const otp = Math.floor(100000 + Math.random() * 900000); // Example 6-digit OTP
+    const otp = generateOTP();
     user.otp = otp;
-    user.otpExpires = Date.now() + 10 * 60 * 1000; // OTP expires in 10 minutes
+    user.otpExpires = Date.now() + 10 * 60 * 1000; // OTP valid for 10 minutes
+    await user.save();
 
-    // Try sending the OTP via email
-    const otpSent = await sendOtpEmail(email, otp);
+    // Pass the user's name to the email template
+    await sendOtpEmail(user.email, user.name, otp);
 
-    if (otpSent) {
-        // OTP sent successfully, require OTP verification
-        await user.save();
-        return { message: 'OTP sent to your email. Please verify.' };
-    } else {
-        // OTP sending failed, bypass OTP verification
-        user.otp = null; // Clear OTP as we're bypassing it
-        user.otpExpires = null;
-        await user.save();
-
-        // Generate tokens and return directly without OTP verification
-        const accessToken = generateAccessToken(user._id);
-        const refreshToken = generateRefreshToken(user._id);
-
-        return { access: accessToken, refresh: refreshToken, message: 'Login successful, OTP bypassed.' };
-    }
+    return { message: 'OTP sent to your email' };
 };
+
+//Bypass otp temporary code
+// const loginUser = async (email, password) => {
+//     const user = await User.findOne({ email });
+    
+//     if (!user) {
+//         throw new Error('User not found.');
+//     }
+
+//     // Compare the password with the hashed password in the database
+//     const isMatch = await bcrypt.compare(password, user.password); 
+//     if (!isMatch) {
+//         throw new Error('Invalid credentials');
+//     }
+
+//     if (!user.isApproved) {
+//         throw new Error('User account is not approved yet');
+//     }
+
+//     // Generate a new OTP and its expiration time
+//     const otp = Math.floor(100000 + Math.random() * 900000); // Example 6-digit OTP
+//     user.otp = otp;
+//     user.otpExpires = Date.now() + 10 * 60 * 1000; // OTP expires in 10 minutes
+
+//     // Try sending the OTP via email
+//     const otpSent = await sendOtpEmail(email, otp);
+
+//     if (otpSent) {
+//         // OTP sent successfully, require OTP verification
+//         await user.save();
+//         return { message: 'OTP sent to your email. Please verify.' };
+//     } else {
+//         // OTP sending failed, bypass OTP verification
+//         user.otp = null; // Clear OTP as we're bypassing it
+//         user.otpExpires = null;
+//         await user.save();
+
+//         // Generate tokens and return directly without OTP verification
+//         const accessToken = generateAccessToken(user._id);
+//         const refreshToken = generateRefreshToken(user._id);
+
+//         return { access: accessToken, refresh: refreshToken, message: 'Login successful, OTP bypassed.' };
+//     }
+// };
 
 const verifyLoginOtp = async (email, otp) => {
     const user = await User.findOne({ email });
