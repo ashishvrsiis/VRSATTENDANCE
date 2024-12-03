@@ -229,47 +229,94 @@ const sendOtpEmail = async (email, name, otp) => {
 // };
 
 //Bypass otp temporary code
+// const loginUser = async (email, password) => {
+//     const user = await User.findOne({ email });
+    
+//     if (!user) {
+//         throw new Error('User not found.');
+//     }
+
+//     // Compare the password with the hashed password in the database
+//     const isMatch = await bcrypt.compare(password, user.password); 
+//     if (!isMatch) {
+//         throw new Error('Invalid credentials');
+//     }
+
+//     if (!user.isApproved) {
+//         throw new Error('User account is not approved yet');
+//     }
+
+//     // Generate a new OTP and its expiration time
+//     const otp = Math.floor(100000 + Math.random() * 900000); // Example 6-digit OTP
+//     user.otp = otp;
+//     user.otpExpires = Date.now() + 10 * 60 * 1000; // OTP expires in 10 minutes
+
+//     // Try sending the OTP via email
+//     const otpSent = await sendOtpEmail(email, otp);
+
+//     if (otpSent) {
+//         // OTP sent successfully, require OTP verification
+//         await user.save();
+//         return { message: 'OTP sent to your email. Please verify.' };
+//     } else {
+//         // OTP sending failed, bypass OTP verification
+//         user.otp = null; // Clear OTP as we're bypassing it
+//         user.otpExpires = null;
+//         await user.save();
+
+//         // Generate tokens and return directly without OTP verification
+//         const accessToken = generateAccessToken(user._id);
+//         const refreshToken = generateRefreshToken(user._id);
+
+//         return { access: accessToken, refresh: refreshToken, message: 'Login successful, OTP bypassed.' };
+//     }
+// };
+
 const loginUser = async (email, password) => {
     const user = await User.findOne({ email });
-    
-    if (!user) {
-        throw new Error('User not found.');
-    }
+    if (!user) throw new Error('User not found.');
 
-    // Compare the password with the hashed password in the database
-    const isMatch = await bcrypt.compare(password, user.password); 
-    if (!isMatch) {
-        throw new Error('Invalid credentials');
-    }
+    // Verify the password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) throw new Error('Invalid credentials');
 
-    if (!user.isApproved) {
-        throw new Error('User account is not approved yet');
-    }
+    // Ensure the user is approved
+    if (!user.isApproved) throw new Error('User account is not approved yet.');
 
-    // Generate a new OTP and its expiration time
-    const otp = Math.floor(100000 + Math.random() * 900000); // Example 6-digit OTP
-    user.otp = otp;
-    user.otpExpires = Date.now() + 10 * 60 * 1000; // OTP expires in 10 minutes
-
-    // Try sending the OTP via email
-    const otpSent = await sendOtpEmail(email, otp);
-
-    if (otpSent) {
-        // OTP sent successfully, require OTP verification
+    if (user.otpEnabled) {
+        // Generate OTP and send via email
+        const generatedOtp = generateOTP();
+        user.otp = generatedOtp;
+        user.otpExpires = Date.now() + 10 * 60 * 1000; // OTP valid for 10 minutes
         await user.save();
-        return { message: 'OTP sent to your email. Please verify.' };
+        await sendOtpEmail(user.email, user.name, generatedOtp);
+
+        return { 
+            message: 'OTP sent to your email', 
+            otpRequired: true 
+        };
     } else {
-        // OTP sending failed, bypass OTP verification
-        user.otp = null; // Clear OTP as we're bypassing it
-        user.otpExpires = null;
-        await user.save();
+        // Generate access and refresh tokens
+        const accessToken = generateAccessToken(user);
+        const refreshToken = generateRefreshToken(user);
 
-        // Generate tokens and return directly without OTP verification
-        const accessToken = generateAccessToken(user._id);
-        const refreshToken = generateRefreshToken(user._id);
-
-        return { access: accessToken, refresh: refreshToken, message: 'Login successful, OTP bypassed.' };
+        return {
+            message: 'Login successful',
+            otpRequired: false,
+            access: accessToken,  // Directly return access token
+            refresh: refreshToken // Directly return refresh token
+        };
     }
+};
+
+const toggleOtp = async (userId, otpEnabled) => {
+    const user = await User.findById(userId);
+    if (!user) throw new Error('User not found.');
+
+    user.otpEnabled = otpEnabled;
+    await user.save();
+
+    return { message: `OTP ${otpEnabled ? 'enabled' : 'disabled'} for the user.` };
 };
 
 const verifyLoginOtp = async (email, otp) => {
@@ -291,4 +338,4 @@ const verifyLoginOtp = async (email, otp) => {
     return { access: accessToken, refresh: refreshToken };
 };
 
-module.exports = { registerUser, loginUser, generateOTP, sendOtpEmail, verifyLoginOtp };
+module.exports = { registerUser, loginUser, generateOTP, sendOtpEmail, verifyLoginOtp, toggleOtp };

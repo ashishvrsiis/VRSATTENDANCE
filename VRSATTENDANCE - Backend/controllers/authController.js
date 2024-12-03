@@ -21,15 +21,35 @@ const register = async (req, res) => {
     }
 };
 
+// const login = async (req, res) => {
+//     try {
+//         const { email, password } = req.body;
+//         const response = await authService.loginUser(email, password);
+//         res.status(200).json(response);
+
+//         const managers = await User.find({ role: 3 });
+//         console.log(managers); // All managers with the updated 'manager' field
+
+//     } catch (error) {
+//         res.status(400).json({ message: error.message });
+//     }
+// };
+
 const login = async (req, res) => {
     try {
         const { email, password } = req.body;
         const response = await authService.loginUser(email, password);
+        res.status(200).json(response); // Return the structured response
+    } catch (error) {
+        res.status(400).json({ message: error.message }); // Send error as response
+    }
+};
+
+const toggleOtp = async (req, res) => {
+    try {
+        const { userId, otpEnabled } = req.body;
+        const response = await authService.toggleOtp(userId, otpEnabled);
         res.status(200).json(response);
-
-        const managers = await User.find({ role: 3 });
-        console.log(managers); // All managers with the updated 'manager' field
-
     } catch (error) {
         res.status(400).json({ message: error.message });
     }
@@ -195,4 +215,4 @@ const verifyOtp = async (req, res) => {
     }
 };
 
-module.exports = { register, login, approveRegistration, rejectRegistration, getPendingRegistrations, requestOtp, verifyOtp, verifyLoginOtp};
+module.exports = { register, login, approveRegistration, rejectRegistration, getPendingRegistrations, requestOtp, verifyOtp, verifyLoginOtp, toggleOtp};

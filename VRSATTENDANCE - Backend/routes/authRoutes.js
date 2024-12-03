@@ -16,5 +16,6 @@ router.post('/reject-registration/:id', authenticateToken, authController.reject
 router.post('/request-otp', authController.requestOtp); // New route to request OTP
 router.post('/verify-otp', authController.verifyOtp);   // New route to verify OTP
 router.post('/verifyLoginOtp', authController.verifyLoginOtp);
+router.post('/toggle-otp', authenticateToken, authController.toggleOtp); // Protected route to toggle OTP
 
 module.exports = router;
