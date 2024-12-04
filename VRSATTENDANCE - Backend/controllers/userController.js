@@ -27,6 +27,7 @@ exports.getUserProfile = async (req, res) => {
                 website: user.website,
                 employeeId: user.employeeId,
                 isEmailVerified: user.isEmailVerified, // Return isEmailVerified
+                manager: user.manager,
                 // Avoid returning the password for security reasons
             });
         } else {
