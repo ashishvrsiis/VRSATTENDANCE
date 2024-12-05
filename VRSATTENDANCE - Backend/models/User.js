@@ -66,6 +66,19 @@ userSchema.post('findOne', async function (doc) {
     }
 });
 
+userSchema.post('find', async function (docs) {
+    for (const doc of docs) {
+        if (doc.role === 3) { // Manager
+            const hasReports = await mongoose.model('User').exists({ managerId: doc._id }); // Use managerId
+            if (doc.manager !== !!hasReports) {
+                doc.manager = !!hasReports;
+                await doc.save(); // Save updated manager field
+            }
+        }
+    }
+});
+
+
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 module.exports = User;
 

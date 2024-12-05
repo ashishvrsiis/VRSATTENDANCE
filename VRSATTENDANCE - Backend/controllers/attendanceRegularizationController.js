@@ -8,11 +8,14 @@ class AttendanceRegularizationController {
 
       // Since attendanceList is now plain JavaScript objects (after using `.lean()` in the service),
       // we can map directly over them.
-      res.status(200).json(attendanceList.map(attendance => ({
+      res.status(200).json(attendanceList.map(attendance => {
+        console.log('Processed Attendance:', JSON.stringify(attendance, null, 2));
+        return {
         ...attendance,  // No need for `.toObject()` since it's a plain object
         regularizationType: attendance.leaveType, // Map leaveType to regularizationType
         employeeName: attendance.user ? attendance.user.name : 'Unknown', // Provide default value if name is not available
-      })));
+      };
+    }));
     } catch (error) {
       console.error('Error in getAttendanceList controller:', error);
       res.status(500).json({ error: 'Error fetching attendance list', details: error.message });
