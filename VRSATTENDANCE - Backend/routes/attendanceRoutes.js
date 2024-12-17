@@ -5,6 +5,7 @@ const authenticateToken = require('../middleware/authenticateToken');
 
 router.get('/today', authenticateToken, attendanceController.getTodayAttendance);
 router.get('/monthly', authenticateToken, attendanceController.getMonthlyAttendance);
+router.get('/weekly', authenticateToken, attendanceController.getWeeklyAttendance);
 router.post('/mark', authenticateToken, attendanceController.markAttendance);
 router.get('/history', authenticateToken, attendanceController.getAttendanceHistory);
 router.get('/admin/history',authenticateToken, attendanceController.retrieveAttendanceHistory);

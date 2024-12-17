@@ -62,6 +62,37 @@ exports.getMonthlyAttendance = async (userId, startOfMonth, endOfMonth) => {
     }
 };
 
+exports.getWeeklyAttendance = async (userId, startOfWeek, endOfWeek) => {
+    try {
+        console.log(`Fetching attendance records for userId: ${userId}, date range: ${startOfWeek} to ${endOfWeek}`);
+
+        // Fetch attendance records for the given user and date range
+        const records = await Attendance.find({
+            userId,
+            date: { $gte: startOfWeek, $lte: endOfWeek }
+        }).lean();
+
+        console.log('Fetched records from the database:', JSON.stringify(records, null, 2));
+
+        // Format attendance records and calculate worked seconds
+        const formattedRecords = records.map(record => ({
+            date: record.date,
+            shift_start_marked: !!record.punchIn,
+            shift_end_marked: !!record.punchOut,
+            worked_seconds: record.punchIn && record.punchOut
+                ? moment(record.punchOut).diff(moment(record.punchIn), 'seconds') // Calculate worked time in seconds
+                : 0
+        }));
+
+        console.log('Formatted weekly attendance records:', JSON.stringify(formattedRecords, null, 2));
+
+        return formattedRecords;
+    } catch (error) {
+        console.error('Error fetching weekly attendance:', error);
+        throw new Error('Error fetching weekly attendance');
+    }
+};
+
 const getDistanceFromLatLonInKm = (lat1, lon1, lat2, lon2) => {
     const R = 6371; // Radius of Earth in kilometers
     const dLat = (lat2 - lat1) * (Math.PI / 180);
@@ -189,72 +220,129 @@ exports.getAttendanceByDateRange = async (userId, startDate, endDate) => {
     try {
         console.log(`Fetching attendance records for userId: ${userId}, date range: ${startDate} to ${endDate}`);
 
-        const managers = await User.find({ role: 3 });
-        console.log(managers); // All managers with the updated 'manager' field
-
         // Convert userId to ObjectId
         const userObjectId = new mongoose.Types.ObjectId(userId);
 
-        // Fetch attendance records for the given user and date range
+        // Fetch attendance records for the given date range
         const records = await Attendance.find({
             userId: userObjectId,
             date: { $gte: startDate, $lte: endDate }
-        }).lean(); // Use .lean() for better performance
+        }).lean();
 
-        console.log('Fetched records from the database:', JSON.stringify(records, null, 2));
+        // Fetch regularization data where status is 'Approved'
+        const regularizations = await AttendanceRegularization.find({
+            user: userObjectId,
+            startDate: { $lte: endDate },
+            endDate: { $gte: startDate },
+            status: 'Approved'
+        }).lean();
 
-        // Get the current date and time for comparison
-        const currentDateTime = moment();
-
-        // Format the attendance records with present/absent status and total working hours
-        const formattedRecords = records.map(record => {
-            const shiftStartMarked = !!record.punchIn;
-            const shiftEndMarked = !!record.punchOut;
-
-            // Check if the record's date is today and if it's before or after the end of the day
-            const recordDate = moment(record.date);
-            const isToday = recordDate.isSame(currentDateTime, 'day');
-            const isBeforeEndOfDay = isToday && currentDateTime.isBefore(recordDate.endOf('day'));
-
-            // Calculate present/absent status based on the provided logic
-            let present;
-            if (shiftStartMarked) {
-                // Mark as present if the shift has started, regardless of punch out status
-                present = 'Yes';
-            } else {
-                // Mark as absent if no shift start and it's after end of day
-                present = isBeforeEndOfDay ? 'No' : 'Yes';
+        // Map regularization dates for quick lookup
+        const regularizedDates = new Set();
+        regularizations.forEach(reg => {
+            const current = moment(reg.startDate);
+            const end = moment(reg.endDate);
+            while (current.isSameOrBefore(end)) {
+                regularizedDates.add(current.format('YYYY-MM-DD'));
+                current.add(1, 'days');
             }
-
-            const absent = present === 'No' ? 'Yes' : 'No';
-
-            // Calculate total working hours
-            let totalWorkingHours;
-            if (shiftStartMarked && shiftEndMarked) {
-                // Calculate the difference between punchIn and punchOut
-                const punchInTime = moment(record.punchIn);
-                const punchOutTime = moment(record.punchOut);
-                totalWorkingHours = moment.duration(punchOutTime.diff(punchInTime)).humanize();
-            } else if (shiftStartMarked && !shiftEndMarked) {
-                totalWorkingHours = 'Shift not marked end';
-            } else {
-                totalWorkingHours = 'No working hours';
-            }
-
-            return {
-                date: record.date,
-                punchIn: record.punchIn ? record.punchIn.toISOString() : null,
-                punchOut: record.punchOut ? record.punchOut.toISOString() : null,
-                shift_start_marked: shiftStartMarked,
-                shift_end_marked: shiftEndMarked,
-                image: record.image ? `data:image/jpeg;base64,${record.image}` : '', // Include base64 image
-                present, // Add present status
-                absent, // Add absent status
-                totalWorkingHours // Add total working hours
-            };
         });
 
+        console.log('Regularized Dates:', Array.from(regularizedDates));
+
+        // Prepare attendance records map for quick lookup
+        const attendanceMap = {};
+        records.forEach(record => {
+            const recordDate = moment(record.date).format('YYYY-MM-DD');
+            attendanceMap[recordDate] = record;
+        });
+
+        // Generate a full date range between startDate and endDate
+        const fullDateRange = [];
+        const start = moment(startDate);
+        const end = moment(endDate);
+        while (start.isSameOrBefore(end)) {
+            fullDateRange.push(start.format('YYYY-MM-DD'));
+            start.add(1, 'days');
+        }
+
+        console.log('Full Date Range:', fullDateRange);
+
+        // Format and combine attendance and regularization data
+        const currentDateTime = moment();
+        const formattedRecords = fullDateRange.map(date => {
+            const record = attendanceMap[date];
+            const isRegularized = regularizedDates.has(date);
+
+            let present, absent, totalWorkingHours;
+
+            if (record) {
+                // Attendance data exists
+                const shiftStartMarked = !!record.punchIn;
+                const shiftEndMarked = !!record.punchOut;
+
+                if (isRegularized) {
+                    present = 'Attendance Regularized';
+                } else if (shiftStartMarked) {
+                    present = 'Yes';
+                } else {
+                    const isToday = moment(date).isSame(currentDateTime, 'day');
+                    present = isToday && currentDateTime.isBefore(moment(date).endOf('day')) ? 'No' : 'Yes';
+                }
+
+                absent = present === 'No' ? 'Yes' : 'No';
+
+                if (shiftStartMarked && shiftEndMarked) {
+                    const punchInTime = moment(record.punchIn);
+                    const punchOutTime = moment(record.punchOut);
+                    totalWorkingHours = moment.duration(punchOutTime.diff(punchInTime)).humanize();
+                } else if (shiftStartMarked && !shiftEndMarked) {
+                    totalWorkingHours = 'Shift not marked end';
+                } else {
+                    totalWorkingHours = isRegularized ? 'Attendance Regularized' : 'No working hours';
+                }
+
+                return {
+                    date: record.date,
+                    punchIn: record.punchIn ? record.punchIn.toISOString() : null,
+                    punchOut: record.punchOut ? record.punchOut.toISOString() : null,
+                    shift_start_marked: shiftStartMarked,
+                    shift_end_marked: shiftEndMarked,
+                    image: record.image ? `data:image/jpeg;base64,${record.image}` : '', // Include base64 image
+                    present,
+                    absent,
+                    totalWorkingHours
+                };
+            } else if (isRegularized) {
+                // Attendance not marked, but regularized
+                return {
+                    date: date,
+                    punchIn: null,
+                    punchOut: null,
+                    shift_start_marked: false,
+                    shift_end_marked: false,
+                    present: 'Attendance Regularized',
+                    absent: 'No',
+                    totalWorkingHours: 'Attendance Regularized'
+                };
+            } else {
+                // Attendance not marked and not regularized
+                return {
+                    date: date,
+                    punchIn: null,
+                    punchOut: null,
+                    shift_start_marked: false,
+                    shift_end_marked: false,
+                    present: 'No',
+                    absent: 'Yes',
+                    totalWorkingHours: 'No working hours'
+                };
+            }
+        });
+
+        console.log('Final Formatted Records:', JSON.stringify(formattedRecords, null, 2));
         return formattedRecords;
+
     } catch (error) {
         console.error('Error fetching attendance by date range:', error);
         throw new Error('Error fetching attendance history');
@@ -268,8 +356,9 @@ exports.retrieveAttendanceHistoryByDateRange = async (userId, startDate, endDate
         // Convert userId to ObjectId
         const userObjectId = new mongoose.Types.ObjectId(userId);
 
+        // Fetch managers with role = 3 (if needed for additional processing)
         const managers = await User.find({ role: 3 });
-        console.log(managers); // All managers with the updated 'manager' field
+        console.log('Managers:', managers);
 
         // Fetch attendance records for the given user and date range
         const records = await Attendance.find({
@@ -277,15 +366,54 @@ exports.retrieveAttendanceHistoryByDateRange = async (userId, startDate, endDate
             date: { $gte: startDate, $lte: endDate }
         }).lean();
 
-        console.log('Fetched records from the database:', JSON.stringify(records, null, 2));
+        console.log('Fetched attendance records:', JSON.stringify(records, null, 2));
 
-        // Format the attendance records with present/absent status and total working hours
+        // Fetch regularization data where status is 'Approved'
+        const regularizations = await AttendanceRegularization.find({
+            user: userObjectId,
+            startDate: { $lte: endDate },
+            endDate: { $gte: startDate },
+            status: 'Approved'
+        }).lean();
+
+        // Map regularization dates for quick lookup
+        const regularizedDates = new Set();
+        regularizations.forEach(reg => {
+            const current = moment(reg.startDate);
+            const end = moment(reg.endDate);
+            while (current.isSameOrBefore(end)) {
+                regularizedDates.add(current.format('YYYY-MM-DD'));
+                current.add(1, 'days');
+            }
+        });
+
+        console.log('Regularized Dates:', Array.from(regularizedDates));
+
+        // Current date for comparison
+        const currentDateTime = moment();
+
+        // Format attendance records
         const formattedRecords = records.map(record => {
             const shiftStartMarked = !!record.punchIn;
             const shiftEndMarked = !!record.punchOut;
-            const present = shiftStartMarked ? 'Yes' : 'No';
+
+            const recordDate = moment(record.date).format('YYYY-MM-DD');
+            const isRegularized = regularizedDates.has(recordDate);
+
+            // Determine "present" status
+            let present;
+            if (isRegularized) {
+                present = 'Attendance Regularized';
+            } else if (shiftStartMarked) {
+                present = 'Yes';
+            } else {
+                const isToday = moment(record.date).isSame(currentDateTime, 'day');
+                present = isToday && currentDateTime.isBefore(moment(record.date).endOf('day')) ? 'No' : 'Yes';
+            }
+
             const absent = present === 'No' ? 'Yes' : 'No';
 
+            // Calculate total working hours
             let totalWorkingHours;
             if (shiftStartMarked && shiftEndMarked) {
                 const punchInTime = moment(record.punchIn);
@@ -294,7 +422,7 @@ exports.retrieveAttendanceHistoryByDateRange = async (userId, startDate, endDate
             } else if (shiftStartMarked && !shiftEndMarked) {
                 totalWorkingHours = 'Shift not marked end';
             } else {
-                totalWorkingHours = 'No working hours';
+                totalWorkingHours = isRegularized ? 'Attendance Regularized' : 'No working hours';
             }
 
             return {
@@ -303,11 +431,42 @@ exports.retrieveAttendanceHistoryByDateRange = async (userId, startDate, endDate
                 punchOut: record.punchOut ? record.punchOut.toISOString() : null,
                 shift_start_marked: shiftStartMarked,
                 shift_end_marked: shiftEndMarked,
-                present,
+                image: record.image ? `data:image/jpeg;base64,${record.image}` : '', // Include base64 image
+                present, // Add attendance regularization status
                 absent,
                 totalWorkingHours
             };
         });
+
+        // Check for dates with regularization but no attendance record
+        const allDates = new Set();
+        for (let date = moment(startDate); date.isSameOrBefore(endDate); date.add(1, 'days')) {
+            allDates.add(date.format('YYYY-MM-DD'));
+        }
+
+        const attendanceDates = new Set(formattedRecords.map(record => moment(record.date).format('YYYY-MM-DD')));
+
+        // Add missing regularized dates
+        regularizedDates.forEach(date => {
+            if (!attendanceDates.has(date)) {
+                formattedRecords.push({
+                    date: date,
+                    punchIn: null,
+                    punchOut: null,
+                    shift_start_marked: false,
+                    shift_end_marked: false,
+                    image: '',
+                    present: 'Attendance Regularized',
+                    absent: 'No',
+                    totalWorkingHours: 'Attendance Regularized'
+                });
+            }
+        });
+
+        // Sort records by date
+        formattedRecords.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+        console.log('Final formatted records:', JSON.stringify(formattedRecords, null, 2));
 
         return formattedRecords;
     } catch (error) {

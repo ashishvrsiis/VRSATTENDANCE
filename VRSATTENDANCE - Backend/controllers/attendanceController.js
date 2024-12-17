@@ -85,6 +85,92 @@ exports.getMonthlyAttendance = async (req, res) => {
     }
 };
 
+exports.getWeeklyAttendance = async (req, res) => {
+    try {
+        // Verify the user ID from the token
+        const userId = req.user.userId;
+        if (!userId) {
+            console.error('User ID is missing in the request.');
+            return res.status(400).json({ error: 'User ID is missing.' });
+        }
+
+        // Calculate the start and end of the week
+        const startOfWeek = moment().startOf('week').format('YYYY-MM-DD');
+        const endOfWeek = moment().endOf('week').format('YYYY-MM-DD');
+        console.log(`Fetching weekly attendance for userId: ${userId}`);
+        console.log(`Date range: ${startOfWeek} to ${endOfWeek}`);
+
+        // Fetch attendance records from the service
+        const attendanceRecords = await attendanceService.getWeeklyAttendance(userId, startOfWeek, endOfWeek);
+
+        console.log('Fetched weekly records from the database:', JSON.stringify(attendanceRecords, null, 2));
+
+        const TOTAL_DAYS_IN_WEEK = 7;
+
+        // Helper function to format time dynamically
+        const formatTime = (seconds) => {
+            if (seconds < 60) {
+                return `${seconds} sec`;
+            } else if (seconds < 3600) {
+                const mins = Math.floor(seconds / 60);
+                const secs = seconds % 60;
+                return secs > 0 ? `${mins} min ${secs} sec` : `${mins} min`;
+            } else {
+                const hours = Math.floor(seconds / 3600);
+                const mins = Math.floor((seconds % 3600) / 60);
+                const secs = seconds % 60;
+                let result = `${hours} hr`;
+                if (mins > 0) result += ` ${mins} min`;
+                if (secs > 0) result += ` ${secs} sec`;
+                return result;
+            }
+        };
+
+        // Use a Set to track unique dates for calculation purposes
+        const uniqueDates = new Set();
+
+        // Total worked seconds
+        let totalWorkedSeconds = 0;
+
+        attendanceRecords.forEach(record => {
+            const { date, shift_start_marked, shift_end_marked, worked_seconds } = record;
+
+            // Add date to Set if attendance is marked
+            if (shift_start_marked || shift_end_marked) {
+                uniqueDates.add(date); // Ensures unique dates only
+            }
+
+            // Accumulate worked time
+            totalWorkedSeconds += worked_seconds;
+        });
+
+        // Calculate metrics
+        const totalDaysWorked = uniqueDates.size; // Count of unique dates
+        const attendancePercentage = ((totalDaysWorked / TOTAL_DAYS_IN_WEEK) * 100).toFixed(2);
+        const timeOffDays = TOTAL_DAYS_IN_WEEK - totalDaysWorked;
+        const timeOffPercentage = ((timeOffDays / TOTAL_DAYS_IN_WEEK) * 100).toFixed(2);
+
+        const totalWorkedTime = formatTime(totalWorkedSeconds);
+
+        console.log(`Unique Dates: ${Array.from(uniqueDates)}`);
+        console.log(`Total Days Worked: ${totalDaysWorked}, Attendance Percentage: ${attendancePercentage}%`);
+        console.log(`Time Off Days: ${timeOffDays}, Time Off Percentage: ${timeOffPercentage}%`);
+
+        // Send response
+        res.json({
+            weekly_records: attendanceRecords, // Return all records
+            total_worked_time: totalWorkedTime,
+            total_days_worked: totalDaysWorked, // Unique days worked
+            attendance_percentage: attendancePercentage,
+            time_off_days: timeOffDays,
+            time_off_percentage: timeOffPercentage
+        });
+    } catch (error) {
+        console.error('Error fetching weekly attendance:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
 exports.markAttendance = async (req, res) => {
     const userId = req.user.userId;
     const { status, latitude, longitude, image } = req.body;

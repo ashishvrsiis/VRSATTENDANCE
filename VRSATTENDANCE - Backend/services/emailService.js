@@ -58,7 +58,7 @@ const sendEmailWithAttachment = async (to, file, { subject, name, message, fileT
         html: htmlContent,
         attachments: [
             {
-                filename: `document.${fileExtension}`,
+                filename: `Attendance History Report.${fileExtension}`,
                 content: file.buffer,
                 contentType: mimeType,
             },
