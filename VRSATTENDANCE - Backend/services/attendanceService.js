@@ -16,14 +16,16 @@ exports.getTodayAttendance = async (userId, date) => {
     try {
         console.log('Querying for userId:', userId, 'and date:', date); // Log query parameters
 
-        const managers = await User.find({ role: 3 });
-        console.log(managers); // All managers with the updated 'manager' field
+        // const managers = await User.find({ role: 3 });
+        // console.log(managers); // All managers with the updated 'manager' field
 
 
         // Convert userId to ObjectId
         const userObjectId = new mongoose.Types.ObjectId(userId);
 
-        const attendance = await Attendance.find({ userId: userObjectId, date: date });
+        const attendance = await Attendance.find(
+            { userId: userObjectId, date: date },
+            { image: 0 });
         console.log('Found attendance records:', attendance); // Log found records
         return attendance;
     } catch (error) {
