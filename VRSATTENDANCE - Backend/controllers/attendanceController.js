@@ -280,6 +280,22 @@ exports.getAttendanceReportPDF = async (req, res) => {
     }
 };
 
+exports.getAttendanceReportExcel = async (req, res) => {
+    try {
+        const { startDate, endDate } = req.query;
+
+        if (!startDate || !endDate) {
+            return res.status(400).json({ message: "Start date and end date are required" });
+        }
+
+        // Call the generateAttendanceReportExcel method from attendanceService
+        await attendanceService.generateAttendanceReportExcel(startDate, endDate, res);
+    } catch (error) {
+        console.error("Error generating attendance report Excel:", error);
+        res.status(500).json({ message: "Failed to generate attendance report Excel" });
+    }
+};
+
 exports.getAllUsersAttendanceHistory = async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
@@ -336,5 +352,77 @@ exports.getAllUsersAttendanceHistory = async (req, res) => {
     } catch (error) {
         console.error('Error fetching attendance history for all users:', error.message);
         res.status(500).json({ error: error.message });
+    }
+};
+
+exports.getCurrentUserAttendanceHistoryPDF = async (req, res) => {
+    try {
+        const { startDate, endDate } = req.query || {}; // Safely destructure with fallback to empty object
+
+        if (!startDate || !endDate) {
+            return res.status(400).json({ message: 'Start date and end date are required' });
+        }
+
+        await attendanceService.generateCurrentUserAttendanceHistoryPDF(req, res); // Pass req and res to use in service
+    } catch (error) {
+        console.error('Error generating attendance history PDF:', error);
+        res.status(500).json({ message: 'Failed to generate attendance history PDF' });
+    }
+};
+
+exports.getCurrentUserAttendanceHistoryExcel = async (req, res) => {
+    try {
+        const { startDate, endDate } = req.query || {};
+
+        if (!startDate || !endDate) {
+            return res.status(400).json({ message: 'Start date and end date are required' });
+        }
+
+        await attendanceService.generateCurrentUserAttendanceHistoryExcel(req, res);
+    } catch (error) {
+        console.error('Error generating attendance history Excel:', error);
+        res.status(500).json({ message: 'Failed to generate attendance history Excel' });
+    }
+};
+
+exports.getUserAttendanceHistoryExcel = async (req, res) => {
+    try {
+        const { userId } = req.params;  // Fetching userId from request parameters
+        const { startDate, endDate } = req.query || {};
+
+        // Role-based access control
+        if (req.user.role !== 1 && req.user.role !== 2 && !(req.user.role === 3 && req.user.manager)) {
+            return res.status(403).json({ message: 'Access denied' });
+        }
+
+        if (!userId || !startDate || !endDate) {
+            return res.status(400).json({ message: 'User ID, start date, and end date are required' });
+        }
+
+        await attendanceService.generateUserAttendanceHistoryExcel(req, res, userId);
+    } catch (error) {
+        console.error('Error generating user attendance history Excel:', error);
+        res.status(500).json({ message: 'Failed to generate user attendance history Excel' });
+    }
+};
+
+exports.getUserAttendanceHistoryPDF = async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { startDate, endDate } = req.query || {};
+
+        // Role-based access control
+        if (req.user.role !== 1 && req.user.role !== 2 && !(req.user.role === 3 && req.user.manager)) {
+            return res.status(403).json({ message: 'Access denied' });
+        }
+
+        if (!userId || !startDate || !endDate) {
+            return res.status(400).json({ message: 'User ID, start date, and end date are required' });
+        }
+
+        await attendanceService.generateUserAttendanceHistoryPDF(req, res, userId);
+    } catch (error) {
+        console.error('Error generating user attendance history PDF:', error);
+        res.status(500).json({ message: 'Failed to generate user attendance history PDF' });
     }
 };

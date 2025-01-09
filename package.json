@@ -1,6 +1,8 @@
 {
   "dependencies": {
+    "exceljs": "^4.4.0",
     "moment": "^2.30.1",
-    "pdfkit": "^0.15.1"
+    "pdfkit": "^0.15.1",
+    "puppeteer": "^23.11.1"
   }
 }

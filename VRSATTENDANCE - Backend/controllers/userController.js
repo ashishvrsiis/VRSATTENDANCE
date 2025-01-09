@@ -19,7 +19,7 @@ exports.getUserProfile = async (req, res) => {
                 phone: user.phone,
                 role: user.role, // Directly return the numeric role value (1, 2, or 3)
                 dateOfBirth: user.dateOfBirth,
-                profileImage: user.profileImage,
+                // profileImage: user.profileImage,
                 position: user.position,
                 managerName: user.managerName, // This will now be populated correctly
                 managerRole: user.managerRole,
@@ -195,7 +195,7 @@ exports.getAllUsers = async (req, res) => {
         }
 
         // Fetch all users
-        const users = await User.find();
+        const users = await User.find({}, '-profileImage');
         res.status(200).json(users);
 
         const managers = await User.find({ role: 3 });

@@ -9,7 +9,11 @@ const Toll = require('../models/tollModel');
 const RecentActivity = require('../models/RecentActivity');
 const AttendanceRegularization = require('../models/AttendanceRegularization');
 const PDFDocument = require('pdfkit');
+const handlebars = require('handlebars');  // For template processing
 const fs = require('fs');
+const path = require('path');
+const puppeteer = require('puppeteer');
+const ExcelJS = require('exceljs');
 
 
 exports.getTodayAttendance = async (userId, date) => {
@@ -479,89 +483,738 @@ exports.retrieveAttendanceHistoryByDateRange = async (userId, startDate, endDate
 
 exports.generateAttendanceReportPDF = async (startDate, endDate, res) => {
     try {
-        // Fetch all users from the database
-        const users = await User.find({});  // Assumes a User model is defined
+        console.log('Fetching users...');
+        const users = await User.find({});
+        console.log(`Total users found: ${users.length}`);
 
         if (users.length === 0) {
             return res.status(404).json({ message: 'No users found' });
         }
 
-        console.log('Found users:', users);
+        const templatePath = path.join(__dirname, '..', 'templates', 'AttendanceReportUI.html');
+        console.log(`Template path: ${templatePath}`);
+        let templateSource;
+        try {
+            templateSource = fs.readFileSync(templatePath, 'utf-8');
+            console.log('Template loaded successfully.');
+        } catch (templateError) {
+            console.error('Error reading template file:', templateError);
+            throw new Error('Template file not found or inaccessible.');
+        }
+        const template = handlebars.compile(templateSource);
+        console.log('Template compiled.');
 
-        const managers = await User.find({ role: 3 });
-        console.log(managers); // All managers with the updated 'manager' field
+        const usersData = await Promise.all(users.map(async (user) => {
+            console.log(`Fetching attendance for user: ${user.name} (ID: ${user._id})`);
+            const attendanceRecords = await this.getAttendanceByDateRange(user._id.toString(), startDate, endDate).catch(err => {
+                console.error(`Error fetching attendance for user ${user.name}:`, err);
+                return [];
+            });            console.log(`Total attendance records for ${user.name}: ${attendanceRecords.length}`);
+            return {
+                name: user.name,
+                email: user.email,
+                phone: user.phone,
+                dateOfBirth: user.dateOfBirth,
+                employeeId: user.employeeId,
+                position: user.position,
+                managerName: user.managerName,
+                managerRole: user.managerRole,
+                workLocation: user.workLocation,
+                fatherName: user.fatherName,
+                plazaName: user.plazaName,
+                attendanceRecords: attendanceRecords.map((record, index) => ({
+                    serialNo: index + 1,
+                    date: record.date,
+                    image: record.image,
+                    punchIn: record.punchIn || 'N/A',
+                    punchOut: record.punchOut || 'N/A',
+                    totalWorkingHours: record.totalWorkingHours || 'N/A',
+                }))
+            };
+        }));
 
+        console.log('User data processed for report:', JSON.stringify(usersData, null, 2));
+        const reportData = {
+            startDate: moment(startDate).format('MMMM Do, YYYY'),
+            endDate: moment(endDate).format('MMMM Do, YYYY'),
+            users: usersData,
+        };
 
-        // Create a new PDF document for all users
-        const doc = new PDFDocument();
+        const htmlContent = template(reportData);
+        console.log('HTML content generated.');
 
-        // Set the correct content type and disposition to make it downloadable
+        const browser = await puppeteer.launch();
+        const page = await browser.newPage();
+        await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
+
+        console.log('Generating PDF...');
+        const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
+        await browser.close();
+        console.log('Sending PDF response...');
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.pdf`);
+        if (res.headersSent) {
+            console.error('Response already sent.');
+            return;
+        }
+        res.end(pdfBuffer);
+    } catch (error) {
+        console.error('Error generating PDF report:', error);
+        res.status(500).json({ message: 'Failed to generate All PDF report' });
+    }
+};
 
-        // Pipe the document to the response stream (not to a file)
-        doc.pipe(res);
+exports.generateAttendanceReportExcel = async (startDate, endDate, res) => {
+    try {
+        const users = await User.find({});
 
-        // Document metadata
-        doc.info.Title = 'Attendance History Report';
-        doc.info.Author = 'Your Application';
-
-        // Add a title to the PDF
-        doc.fontSize(18).text('Attendance History Report', { align: 'center' });
-        doc.moveDown();
-
-        // Loop through each user and generate their report
-        for (const user of users) {
-            const userId = user._id.toString();
-
-            // Fetch attendance data for the user
-            const attendanceRecords = await this.getAttendanceByDateRange(userId, startDate, endDate);
-
-            if (!attendanceRecords || attendanceRecords.length === 0) {
-                console.log(`No attendance records found for user: ${userId}`);
-                continue;  // Skip this user if there are no attendance records
-            }
-
-            // Add user name and date range to the PDF
-            doc.fontSize(12).text(`User: ${user.name}`, { align: 'center' });
-            doc.text(`Report for: ${moment(startDate).format('MMMM Do, YYYY')} to ${moment(endDate).format('MMMM Do, YYYY')}`, { align: 'center' });
-            doc.moveDown(2);
-
-            // Table headers
-            doc.fontSize(10).text('Date', 50, doc.y, { width: 100, align: 'left' });
-            doc.text('Punch In', 150, doc.y, { width: 100, align: 'left' });
-            doc.text('Punch Out', 250, doc.y, { width: 100, align: 'left' });
-            doc.text('Present', 350, doc.y, { width: 100, align: 'left' });
-            doc.text('Absent', 450, doc.y, { width: 100, align: 'left' });
-            doc.text('Working Hours', 550, doc.y, { width: 100, align: 'left' });
-            doc.moveDown();
-
-            // Draw line under header
-            doc.moveTo(50, doc.y).lineTo(560, doc.y).stroke();
-            doc.moveDown();
-
-            // Loop through each record and add to the table
-            attendanceRecords.forEach(record => {
-                const { date, punchIn, punchOut, present, absent, totalWorkingHours } = record;
-
-                doc.text(moment(date).format('YYYY-MM-DD'), 50, doc.y, { width: 100 });
-                doc.text(punchIn ? moment(punchIn).format('HH:mm:ss') : 'N/A', 150, doc.y, { width: 100 });
-                doc.text(punchOut ? moment(punchOut).format('HH:mm:ss') : 'N/A', 250, doc.y, { width: 100 });
-                doc.text(present, 350, doc.y, { width: 100 });
-                doc.text(absent, 450, doc.y, { width: 100 });
-                doc.text(totalWorkingHours, 550, doc.y, { width: 100 });
-                doc.moveDown();
-            });
-
-            doc.addPage();  // Start a new page for the next user
+        if (users.length === 0) {
+            return res.status(404).json({ message: 'No users found' });
         }
 
-        // Finalize the document
-        doc.end();
+        const usersData = await Promise.all(users.map(async (user) => {
+            const attendanceRecords = await this.getAttendanceByDateRange(user._id.toString(), startDate, endDate);
+            const regularizations = await AttendanceRegularization.find({
+                user: user._id,
+                startDate: { $lte: endDate },
+                endDate: { $gte: startDate },
+                status: 'Approved'
+            }).lean();
 
-        console.log('PDF report generated and sent to the frontend');
+            // Map regularization dates for quick lookup
+            const regularizedDates = new Set();
+            regularizations.forEach(reg => {
+                const current = moment(reg.startDate);
+                const end = moment(reg.endDate);
+                while (current.isSameOrBefore(end)) {
+                    regularizedDates.add(current.format('YYYY-MM-DD'));
+                    current.add(1, 'days');
+                }
+            });
+
+            return {
+                name: user.name,
+                email: user.email,
+                phone: user.phone,
+                dateOfBirth: user.dateOfBirth,
+                employeeId: user.employeeId,
+                position: user.position,
+                managerName: user.managerName,
+                managerRole: user.managerRole,
+                workLocation: user.workLocation,
+                fatherName: user.fatherName,
+                plazaName: user.plazaName,
+                attendanceRecords: attendanceRecords.map((record, index) => ({
+                    serialNo: index + 1,
+                    date: record.date,
+                    punchIn: record.punchIn || 'N/A',
+                    punchOut: record.punchOut || 'N/A',
+                    totalWorkingHours: record.totalWorkingHours || 'N/A',
+                    image: record.image || null,
+                    isRegularized: regularizedDates.has(moment(record.date).format('YYYY-MM-DD')) ? 'Yes' : 'No',
+                })),
+            };
+        }));
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Attendance Report');
+
+        usersData.forEach((user, userIndex) => {
+            // Add User Info Section Title
+            const titleRow = worksheet.addRow(['User Info']);
+            worksheet.mergeCells(`A${titleRow.number}:M${titleRow.number}`);
+            titleRow.font = { bold: true, color: { argb: 'FFFFFF' }, size: 14 };
+            titleRow.alignment = { horizontal: 'center' };
+            titleRow.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: '25325F' },
+            };
+
+            // Add User Info Headers
+            const userHeaders = [
+                'Serial No',
+                'Name',
+                'Email',
+                'Phone',
+                'Date of Birth',
+                'Employee ID',
+                'Position',
+                'Manager Name',
+                'Manager Role',
+                'Work Location',
+                'Father Name',
+                'Plaza Name',
+            ];
+            const userHeaderRow = worksheet.addRow(userHeaders);
+            userHeaderRow.font = { bold: true, color: { argb: 'FFFFFF' } };
+            userHeaderRow.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'F7A832' },
+            };
+            userHeaderRow.eachCell(cell => {
+                cell.border = {
+                    top: { style: 'thin' },
+                    left: { style: 'thin' },
+                    bottom: { style: 'thin' },
+                    right: { style: 'thin' },
+                };
+            });
+
+            // Add User Info Data
+            const userInfoRow = worksheet.addRow([
+                userIndex + 1,
+                user.name,
+                user.email,
+                user.phone,
+                user.dateOfBirth,
+                user.employeeId,
+                user.position,
+                user.managerName,
+                user.managerRole,
+                user.workLocation,
+                user.fatherName,
+                user.plazaName,
+            ]);
+            userInfoRow.eachCell(cell => {
+                cell.border = {
+                    top: { style: 'thin' },
+                    left: { style: 'thin' },
+                    bottom: { style: 'thin' },
+                    right: { style: 'thin' },
+                };
+            });
+
+            // Leave a blank row for separation
+            worksheet.addRow([]);
+
+            // Add Attendance Records Section Title
+            const attendanceTitleRow = worksheet.addRow(['Attendance Records']);
+            worksheet.mergeCells(`A${attendanceTitleRow.number}:E${attendanceTitleRow.number}`);
+            attendanceTitleRow.font = { bold: true, color: { argb: 'FFFFFF' }, size: 14 };
+            attendanceTitleRow.alignment = { horizontal: 'center' };
+            attendanceTitleRow.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: '25325F' },
+            };
+
+            // Add Attendance Records Headers
+            const attendanceHeaders = ['Date', 'Punch In', 'Punch Out', 'Total Working Hours', 'Regularized'];
+            const attendanceHeaderRow = worksheet.addRow(attendanceHeaders);
+            attendanceHeaderRow.font = { bold: true, color: { argb: 'FFFFFF' } };
+            attendanceHeaderRow.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'F7A832' },
+            };
+            attendanceHeaderRow.eachCell(cell => {
+                cell.border = {
+                    top: { style: 'thin' },
+                    left: { style: 'thin' },
+                    bottom: { style: 'thin' },
+                    right: { style: 'thin' },
+                };
+            });
+
+            // Add Attendance Records Data
+            user.attendanceRecords.forEach(record => {
+                const recordRow = worksheet.addRow([
+                    record.date,
+                    '',
+                    record.punchIn,
+                    record.punchOut,
+                    record.totalWorkingHours,
+                    record.isRegularized,
+                ]);
+            
+                if (record.image) {
+                    // Decode base64 image
+                    const imageBuffer = Buffer.from(record.image.split(',')[1], 'base64');
+            
+                    // Add the image to the workbook
+                    const imageId = workbook.addImage({
+                        buffer: imageBuffer,
+                        extension: 'jpeg',
+                    });
+            
+                    // Set row height and column width
+                    const rowHeight = 60; // Adjust as needed
+                    const columnWidth = 15; // Adjust as needed
+                    worksheet.getRow(recordRow.number).height = rowHeight;
+                    worksheet.getColumn(2).width = columnWidth;
+            
+                    // Add the image to fit within the cell
+                    worksheet.addImage(imageId, {
+                        tl: { col: 1, row: recordRow.number - 1 }, // Adjust for zero-based index
+                        br: { col: 2, row: recordRow.number }, // End column and row to fit the cell
+                        editAs: 'oneCell',
+                    });
+                }
+            });            
+
+            // Leave a blank row after each user
+            worksheet.addRow([]);
+        });
+
+        // Ensure headers are set before streaming the file
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.xlsx`);
+
+        // Write the Excel file directly to the response
+        await workbook.xlsx.write(res);
+        res.end(); // Ensure the response is properly closed
     } catch (error) {
-        console.error('Error generating PDF reports:', error);
-        res.status(500).json({ message: 'Failed to generate PDF reports' });
+        console.error('Error generating Excel report:', error);
+        res.status(500).json({ message: 'Failed to generate Excel report' });
+    }
+};
+
+exports.generateCurrentUserAttendanceHistoryPDF = async (req, res) => {
+    try {
+        const user = req.user; // User already populated by authenticateToken
+        const { startDate, endDate } = req.query;
+
+        if (!startDate || !endDate) {
+            return res.status(400).json({ message: 'Start date and end date are required' });
+        }
+
+        console.log(`Starting to generate PDF for user: ${user.userId}`);
+        console.log(`User: ${user.userId} (${user.role})`);
+
+        const start = new Date(startDate).toISOString();
+        const end = new Date(endDate).toISOString();
+
+        console.log(`Fetching attendance records between ${start} and ${end} for user ${user.userId}`);
+
+        const attendanceRecords = await Attendance.find({
+            user: user.userId,
+            date: { $gte: new Date(start), $lte: new Date(end) },
+        }).lean();
+
+        if (attendanceRecords.length === 0) {
+            console.warn(`No attendance records found for user ${user.userId} between ${start} and ${end}`);
+            return res.status(404).json({ message: 'No attendance records found' });
+        }
+
+        console.log(`Found ${attendanceRecords.length} attendance records for user ${user.userId}`);
+
+        const attendanceData = attendanceRecords.map((record, index) => ({
+            serialNo: index + 1,
+            date: moment(record.date).format('YYYY-MM-DD'),
+            punchIn: record.punchIn || 'N/A',
+            punchOut: record.punchOut || 'N/A',
+            totalWorkingHours: record.totalWorkingHours || 'N/A',
+        }));
+
+        const reportData = {
+            startDate: moment(startDate).format('MMMM Do, YYYY'),
+            endDate: moment(endDate).format('MMMM Do, YYYY'),
+            user: {
+                name: user.name, // Populate name and other fields from `req.user` if needed
+                email: user.email,
+                phone: user.phone,
+                position: user.position,
+            },
+            attendanceRecords: attendanceData,
+        };
+
+        console.log('Attendance data prepared for template rendering.');
+
+        const templatePath = path.join(__dirname, '..', 'templates', 'AttendanceHistoryTemplate.html');
+        if (!fs.existsSync(templatePath)) {
+            console.error(`Template not found at path: ${templatePath}`);
+            return res.status(500).json({ message: 'Template file missing' });
+        }
+
+        console.log('Template file found. Compiling...');
+        const templateSource = fs.readFileSync(templatePath, 'utf-8');
+        const template = handlebars.compile(templateSource);
+        const htmlContent = template(reportData);
+
+        console.log('Launching Puppeteer to generate PDF...');
+        const browser = await puppeteer.launch();
+        const page = await browser.newPage();
+        await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
+
+        const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
+        console.log('PDF generated successfully.');
+        await browser.close();
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=attendance_history_${moment().format('YYYYMMDDHHmmss')}.pdf`);
+        res.end(pdfBuffer);
+    } catch (error) {
+        console.error('Error generating PDF:', error);
+        res.status(500).json({ message: 'Failed to generate PDF' });
+    }
+};
+
+exports.generateCurrentUserAttendanceHistoryExcel = async (req, res) => {
+    try {
+        const user = req.user; // User extracted from the token
+        const { startDate, endDate } = req.query;
+
+        if (!startDate || !endDate) {
+            return res.status(400).json({ message: 'Start date and end date are required' });
+        }
+
+        console.log(`Generating Excel for Current user: ${user.userId}`);
+
+        // Fetch attendance records for the current user
+        const attendanceRecords = await this.getAttendanceByDateRange(user.userId, startDate, endDate);
+
+        if (!attendanceRecords || attendanceRecords.length === 0) {
+            return res.status(404).json({ message: 'No attendance records found' });
+        }
+
+        // Fetch regularization data for the current user
+        const regularizations = await AttendanceRegularization.find({
+            user: user.userId,
+            startDate: { $lte: endDate },
+            endDate: { $gte: startDate },
+            status: 'Approved'
+        }).lean();
+
+        // Map regularization dates for quick lookup
+        const regularizedDates = new Set();
+        regularizations.forEach(reg => {
+            const current = moment(reg.startDate);
+            const end = moment(reg.endDate);
+            while (current.isSameOrBefore(end)) {
+                regularizedDates.add(current.format('YYYY-MM-DD'));
+                current.add(1, 'days');
+            }
+        });
+
+        // Prepare the user data and attendance records for Excel
+        const userData = {
+            name: user.name,
+            email: user.email,
+            phone: user.phone,
+            dateOfBirth: user.dateOfBirth,
+            employeeId: user.employeeId,
+            position: user.position,
+            managerName: user.managerName,
+            managerRole: user.managerRole,
+            workLocation: user.workLocation,
+            fatherName: user.fatherName,
+            plazaName: user.plazaName,
+            attendanceRecords: attendanceRecords.map((record, index) => ({
+                serialNo: index + 1,
+                date: record.date,
+                punchIn: record.punchIn || 'N/A',
+                punchOut: record.punchOut || 'N/A',
+                totalWorkingHours: record.totalWorkingHours || 'N/A',
+                image: record.image || null, // Add image here if available
+                isRegularized: regularizedDates.has(moment(record.date).format('YYYY-MM-DD')) ? 'Yes' : 'No',
+            }))
+        };
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Attendance History');
+
+        // Add User Info Section
+        const userInfoTitleRow = worksheet.addRow(['User Info']);
+        worksheet.mergeCells(`A${userInfoTitleRow.number}:M${userInfoTitleRow.number}`);
+        userInfoTitleRow.font = { bold: true, color: { argb: 'FFFFFF' }, size: 14 };
+        userInfoTitleRow.alignment = { horizontal: 'center' };
+        userInfoTitleRow.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: '25325F' },
+        };
+
+        // Add User Info Headers
+        const userHeaders = [
+            'Serial No', 'Name', 'Email', 'Phone', 'Date of Birth', 'Employee ID', 
+            'Position', 'Manager Name', 'Manager Role', 'Work Location', 'Father Name', 'Plaza Name'
+        ];
+        const userHeaderRow = worksheet.addRow(userHeaders);
+        userHeaderRow.font = { bold: true, color: { argb: 'FFFFFF' } };
+        userHeaderRow.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'F7A832' },
+        };
+        userHeaderRow.eachCell(cell => {
+            cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+        });
+
+        // Add User Info Data (make sure the user data is included here)
+        const userInfoRow = worksheet.addRow([
+            1, // Serial No. for the current user (always 1 for single user)
+            userData.name,
+            userData.email,
+            userData.phone,
+            userData.dateOfBirth,
+            userData.employeeId,
+            userData.position,
+            userData.managerName,
+            userData.managerRole,
+            userData.workLocation,
+            userData.fatherName,
+            userData.plazaName
+        ]);
+        userInfoRow.eachCell(cell => {
+            cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+        });
+
+        worksheet.addRow([]); // Blank row for separation
+
+        // Add Attendance Records Section
+        const attendanceTitleRow = worksheet.addRow(['Attendance Records']);
+        worksheet.mergeCells(`A${attendanceTitleRow.number}:E${attendanceTitleRow.number}`);
+        attendanceTitleRow.font = { bold: true, color: { argb: 'FFFFFF' }, size: 14 };
+        attendanceTitleRow.alignment = { horizontal: 'center' };
+        attendanceTitleRow.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: '25325F' },
+        };
+
+        // Add Attendance Records Headers
+        const attendanceHeaders = ['Date', 'Punch In', 'Punch Out', 'Total Working Hours', 'Regularized'];
+        const attendanceHeaderRow = worksheet.addRow(attendanceHeaders);
+        attendanceHeaderRow.font = { bold: true, color: { argb: 'FFFFFF' } };
+        attendanceHeaderRow.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'F7A832' },
+        };
+        attendanceHeaderRow.eachCell(cell => {
+            cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+        });
+
+        // Add Attendance Records Data
+        userData.attendanceRecords.forEach(record => {
+            const recordRow = worksheet.addRow([
+                record.date,
+                record.punchIn,
+                record.punchOut,
+                record.totalWorkingHours,
+                record.isRegularized
+            ]);
+
+            if (record.image) {
+                // Decode base64 image (assuming the image is a base64 string)
+                const imageBuffer = Buffer.from(record.image.split(',')[1], 'base64');
+
+                // Add the image to the workbook
+                const imageId = workbook.addImage({
+                    buffer: imageBuffer,
+                    extension: 'jpeg',
+                });
+
+                // Set row height and column width for images
+                worksheet.getRow(recordRow.number).height = 60; // Adjust as needed
+                worksheet.getColumn(2).width = 15; // Adjust as needed
+
+                // Add the image to fit within the cell
+                worksheet.addImage(imageId, {
+                    tl: { col: 1, row: recordRow.number - 1 }, // Adjust for zero-based index
+                    br: { col: 2, row: recordRow.number }, // End column and row to fit the cell
+                    editAs: 'oneCell',
+                });
+            }
+        });
+
+        // Write the Excel file directly to the response
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=attendance_history_${moment().format('YYYYMMDDHHmmss')}.xlsx`);
+        await workbook.xlsx.write(res);
+        res.end(); // Ensure the response is properly closed
+    } catch (error) {
+        console.error('Error generating Excel report:', error);
+        res.status(500).json({ message: 'Failed to generate Excel report' });
+    }
+};
+
+exports.generateUserAttendanceHistoryExcel = async (req, res, userId) => {
+    try {
+        const currentUser = req.user;
+        const { startDate, endDate } = req.query;
+
+        console.log(`Generating Excel report requested by user: ${currentUser.userId} (role: ${currentUser.role})`);
+        console.log(`Requested date range: Start Date - ${startDate}, End Date - ${endDate}`);
+        console.log(`Target user ID for report: ${userId}`);
+
+        if (![1, 2, 3].includes(currentUser.role) || (currentUser.role === 3 && !currentUser.manager)) {
+            console.warn('Permission denied: User does not have required permissions to generate report.');
+            return res.status(403).json({ message: 'You do not have the required permissions to generate this report' });
+        }
+
+        if (!startDate || !endDate) {
+            console.warn('Invalid request: Start date and end date are required.');
+            return res.status(400).json({ message: 'Start date and end date are required' });
+        }
+
+        console.log('Fetching attendance records for date range...');
+        const attendanceRecords = await this.getAttendanceByDateRange(userId, startDate, endDate);
+
+        if (!attendanceRecords || attendanceRecords.length === 0) {
+            console.warn('No attendance records found for the specified date range.');
+            return res.status(404).json({ message: 'No attendance records found' });
+        }
+
+        console.log(`Attendance records fetched: ${attendanceRecords.length} entries found.`);
+        console.log('Fetching approved regularizations...');
+
+        const regularizations = await AttendanceRegularization.find({
+            user: userId,
+            startDate: { $lte: endDate },
+            endDate: { $gte: startDate },
+            status: 'Approved',
+        }).lean();
+
+        if (!regularizations || regularizations.length === 0) {
+            console.log('No regularizations found for this user in the specified date range.');
+        } else {
+            console.log(`Regularizations fetched: ${regularizations.length} entries found.`);
+        }
+
+        const regularizedDates = new Set();
+        regularizations.forEach(reg => {
+            const key = `${reg.user}-${reg.startDate}-${reg.endDate}`;
+            if (!regularizedDates.has(key)) {
+                console.log(`Processing regularization from ${reg.startDate} to ${reg.endDate}`);
+                const current = moment(reg.startDate);
+                const end = moment(reg.endDate);
+                while (current.isSameOrBefore(end)) {
+                    const formattedDate = current.format('YYYY-MM-DD');
+                    regularizedDates.add(formattedDate);
+                    console.log(`Regularized date added: ${formattedDate}`);
+                    current.add(1, 'days');
+                }
+            }
+        });
+
+        console.log('Generating Excel file...');
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('User Attendance History');
+
+        const titleRow = worksheet.addRow(['User Attendance History']);
+        worksheet.mergeCells(`A${titleRow.number}:F${titleRow.number}`);
+        titleRow.font = { bold: true, color: { argb: 'FFFFFF' }, size: 14 };
+        titleRow.alignment = { horizontal: 'center' };
+        titleRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '25325F' } };
+
+        const headers = ['Serial No.', 'Date', 'Image', 'Punch In', 'Punch Out', 'Total Working Hours', 'Regularized'];
+        const headerRow = worksheet.addRow(headers);
+        headerRow.font = { bold: true, color: { argb: 'FFFFFF' } };
+        headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F7A832' } };
+        headerRow.eachCell(cell => {
+            cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+        });
+
+        attendanceRecords.forEach((record, index) => {
+            const row = [
+                index + 1,
+                moment(record.date).format('YYYY-MM-DD'),
+                '', // Empty column for image
+                record.punchIn ? moment(record.punchIn).format('HH:mm:ss') : 'N/A',
+                record.punchOut ? moment(record.punchOut).format('HH:mm:ss') : 'N/A',
+                record.totalWorkingHours || 'N/A',
+                regularizedDates.has(moment(record.date).format('YYYY-MM-DD')) ? 'Yes' : 'No',
+            ];
+        
+            // Add the row without the image column
+            worksheet.addRow(row);
+            console.log(`Added row: ${JSON.stringify(row)}`);
+        
+            const currentRowIndex = index + 2; // Adjust row index to match the added row (since index starts at 0)
+        
+            if (record.image) {
+                // Decode base64 image (assuming the image is a base64 string)
+                const imageBuffer = Buffer.from(record.image.split(',')[1], 'base64');
+        
+                // Add the image to the workbook
+                const imageId = workbook.addImage({
+                    buffer: imageBuffer,
+                    extension: 'jpeg',
+                });
+        
+                // Set row height and column width for images
+                worksheet.getRow(currentRowIndex).height = 60; // Adjust row height to fit the image
+                worksheet.getColumn(3).width = 15; // Adjust the column width to fit the image
+        
+                // Add the image to the correct row and column (no need for -1)
+                worksheet.addImage(imageId, {
+                    tl: { col: 2, row: currentRowIndex }, // Place the image in the right column and row
+                    br: { col: 3, row: currentRowIndex + 1 }, // Make sure it fits properly
+                    editAs: 'oneCell',
+                });
+            }
+        });             
+
+        worksheet.columns.forEach(column => {
+            column.width = 20;  // Adjust as needed to fit contents
+        });
+
+        console.log('Excel file generation complete. Sending response...');
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=user_attendance_${moment().format('YYYYMMDDHHmmss')}.xlsx`);
+        await workbook.xlsx.write(res);
+        res.end();
+        console.log('Excel file successfully written.');
+    } catch (error) {
+        console.error('Error generating Excel:', error);
+        res.status(500).json({ message: 'Failed to generate Excel' });
+    }
+};
+
+exports.generateUserAttendanceHistoryPDF = async (req, res, userId) => {
+    try {
+        const { startDate, endDate } = req.query;
+
+        const start = new Date(startDate).toISOString();
+        const end = new Date(endDate).toISOString();
+
+        const attendanceRecords = await Attendance.find({
+            user: userId,
+            date: { $gte: new Date(start), $lte: new Date(end) },
+        }).lean();
+
+        if (attendanceRecords.length === 0) {
+            return res.status(404).json({ message: 'No attendance records found' });
+        }
+
+        const attendanceData = attendanceRecords.map((record, index) => ({
+            serialNo: index + 1,
+            date: moment(record.date).format('YYYY-MM-DD'),
+            punchIn: record.punchIn || 'N/A',
+            punchOut: record.punchOut || 'N/A',
+            totalWorkingHours: record.totalWorkingHours || 'N/A',
+        }));
+
+        const reportData = {
+            startDate: moment(startDate).format('MMMM Do, YYYY'),
+            endDate: moment(endDate).format('MMMM Do, YYYY'),
+            attendanceRecords: attendanceData,
+        };
+
+        const templatePath = path.join(__dirname, '..', 'templates', 'AttendanceHistoryTemplate.html');
+        if (!fs.existsSync(templatePath)) {
+            return res.status(500).json({ message: 'Template file missing' });
+        }
+
+        const templateSource = fs.readFileSync(templatePath, 'utf-8');
+        const template = handlebars.compile(templateSource);
+        const htmlContent = template(reportData);
+
+        const browser = await puppeteer.launch();
+        const page = await browser.newPage();
+        await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
+
+        const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
+        await browser.close();
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=attendance_history_${moment().format('YYYYMMDDHHmmss')}.pdf`);
+        res.end(pdfBuffer);
+    } catch (error) {
+        console.error('Error generating PDF:', error);
+        res.status(500).json({ message: 'Failed to generate PDF' });
     }
 };

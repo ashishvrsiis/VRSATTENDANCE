@@ -9,7 +9,12 @@ router.get('/weekly', authenticateToken, attendanceController.getWeeklyAttendanc
 router.post('/mark', authenticateToken, attendanceController.markAttendance);
 router.get('/history', authenticateToken, attendanceController.getAttendanceHistory);
 router.get('/admin/history',authenticateToken, attendanceController.retrieveAttendanceHistory);
-router.get('/attendance-report', attendanceController.getAttendanceReportPDF);
+router.get('/attendance-report', authenticateToken, attendanceController.getAttendanceReportPDF);
+router.get('/excel/attendance-report', authenticateToken, attendanceController.getAttendanceReportExcel);
+router.get('/CurrentUser/pdf/attendance-report', authenticateToken, attendanceController.getCurrentUserAttendanceHistoryPDF);
+router.get('/CurrentUser/excel/attendance-report', authenticateToken, attendanceController.getCurrentUserAttendanceHistoryExcel);
+router.get('/user/:userId/excel/attendance-report', authenticateToken, attendanceController.getUserAttendanceHistoryExcel);
+router.get('/user/:userId/pdf/attendance-report', authenticateToken, attendanceController.getUserAttendanceHistoryPDF);
 router.get('/history/all-users', attendanceController.getAllUsersAttendanceHistory);
 
 module.exports = router;
