@@ -263,7 +263,14 @@ exports.retrieveAttendanceHistory = async (req, res) => {
 
 exports.getAttendanceReportPDF = async (req, res) => {
     try {
-        const { startDate, endDate } = req.query;
+        const { startDate, endDate, deliveryMethod, recipientEmail } = req.query;
+
+        const userName = req.user?.name || 'User'; // Get name from token
+        const userEmail = req.user?.email;
+        if (!userEmail) {
+            return res.status(401).json({ message: "Unauthorized: User email not found in token." });
+        }
+        console.log(`Generating attendance report for user: ${userName}`);
 
         const managers = await User.find({ role: 3 });
         console.log(managers); // All managers with the updated 'manager' field
@@ -272,8 +279,10 @@ exports.getAttendanceReportPDF = async (req, res) => {
             return res.status(400).json({ message: "Start date and end date are required" });
         }
 
+        const finalRecipientEmail = deliveryMethod === 'email' ? userEmail : recipientEmail;
+
         // Call the generateAttendanceReportPDF method from attendanceService
-        await attendanceService.generateAttendanceReportPDF(startDate, endDate, res);
+        await attendanceService.generateAttendanceReportPDF(startDate, endDate, req, res, deliveryMethod, finalRecipientEmail, userName );
     } catch (error) {
         console.error("Error generating attendance report PDF:", error);
         res.status(500).json({ message: "Failed to generate attendance report PDF" });
@@ -282,14 +291,30 @@ exports.getAttendanceReportPDF = async (req, res) => {
 
 exports.getAttendanceReportExcel = async (req, res) => {
     try {
-        const { startDate, endDate } = req.query;
+        const { startDate, endDate, deliveryMethod, recipientEmail } = req.query;
+
+        const userEmail = req.user?.email;
+        if (!userEmail) {
+            return res.status(401).json({ message: "Unauthorized: User email not found in token." });
+        }
 
         if (!startDate || !endDate) {
             return res.status(400).json({ message: "Start date and end date are required" });
         }
 
+        // Check if dates are valid
+        if (!moment(startDate, 'YYYY-MM-DD', true).isValid() || !moment(endDate, 'YYYY-MM-DD', true).isValid()) {
+            return res.status(400).json({ message: "Invalid date format. Use 'YYYY-MM-DD'." });
+        }
+
+        const finalRecipientEmail = deliveryMethod === 'email' ? userEmail : recipientEmail;
+
+        if (deliveryMethod === 'email' && !finalRecipientEmail) {
+            return res.status(400).json({ message: 'Email is required when deliveryMethod=email' });
+        }
+
         // Call the generateAttendanceReportExcel method from attendanceService
-        await attendanceService.generateAttendanceReportExcel(startDate, endDate, res);
+        await attendanceService.generateAttendanceReportExcel(startDate, endDate, res, deliveryMethod, finalRecipientEmail);
     } catch (error) {
         console.error("Error generating attendance report Excel:", error);
         res.status(500).json({ message: "Failed to generate attendance report Excel" });
@@ -372,13 +397,24 @@ exports.getCurrentUserAttendanceHistoryPDF = async (req, res) => {
 
 exports.getCurrentUserAttendanceHistoryExcel = async (req, res) => {
     try {
-        const { startDate, endDate } = req.query || {};
+        const { startDate, endDate, deliveryMethod, recipientEmail } = req.query || {};
+
+        const userEmail = req.user?.email;
+        if (!userEmail) {
+            return res.status(401).json({ message: "Unauthorized: User email not found in token." });
+        }
 
         if (!startDate || !endDate) {
             return res.status(400).json({ message: 'Start date and end date are required' });
         }
 
-        await attendanceService.generateCurrentUserAttendanceHistoryExcel(req, res);
+        const finalRecipientEmail = deliveryMethod === 'email' ? userEmail : recipientEmail;
+
+        if (deliveryMethod === 'email' && !finalRecipientEmail) {
+            return res.status(400).json({ message: 'Email is required for deliveryMethod=email' });
+        }
+
+        await attendanceService.generateCurrentUserAttendanceHistoryExcel(req, res, { deliveryMethod, recipientEmail: finalRecipientEmail });
     } catch (error) {
         console.error('Error generating attendance history Excel:', error);
         res.status(500).json({ message: 'Failed to generate attendance history Excel' });
@@ -388,7 +424,12 @@ exports.getCurrentUserAttendanceHistoryExcel = async (req, res) => {
 exports.getUserAttendanceHistoryExcel = async (req, res) => {
     try {
         const { userId } = req.params;  // Fetching userId from request parameters
-        const { startDate, endDate } = req.query || {};
+        const { startDate, endDate, deliveryMethod, recipientEmail } = req.query || {};
+
+        const userEmail = req.user?.email;
+        if (!userEmail) {
+            return res.status(401).json({ message: "Unauthorized: User email not found in token." });
+        }
 
         // Role-based access control
         if (req.user.role !== 1 && req.user.role !== 2 && !(req.user.role === 3 && req.user.manager)) {
@@ -399,7 +440,13 @@ exports.getUserAttendanceHistoryExcel = async (req, res) => {
             return res.status(400).json({ message: 'User ID, start date, and end date are required' });
         }
 
-        await attendanceService.generateUserAttendanceHistoryExcel(req, res, userId);
+        const finalRecipientEmail = deliveryMethod === 'email' ? userEmail : recipientEmail;
+
+        if (deliveryMethod === 'email' && !finalRecipientEmail) {
+            return res.status(400).json({ message: 'Email is required for deliveryMethod=email' });
+        }
+
+        await attendanceService.generateUserAttendanceHistoryExcel(req, res, userId, { deliveryMethod, finalRecipientEmail });
     } catch (error) {
         console.error('Error generating user attendance history Excel:', error);
         res.status(500).json({ message: 'Failed to generate user attendance history Excel' });
@@ -409,20 +456,66 @@ exports.getUserAttendanceHistoryExcel = async (req, res) => {
 exports.getUserAttendanceHistoryPDF = async (req, res) => {
     try {
         const { userId } = req.params;
-        const { startDate, endDate } = req.query || {};
+        const { startDate, endDate, deliveryMethod, recipientEmail } = req.query || {};
 
+        const userEmail = req.user?.email;
+        if (!userEmail) {
+            return res.status(401).json({ message: "Unauthorized: User email not found in token." });
+        }
+        
         // Role-based access control
         if (req.user.role !== 1 && req.user.role !== 2 && !(req.user.role === 3 && req.user.manager)) {
             return res.status(403).json({ message: 'Access denied' });
         }
 
-        if (!userId || !startDate || !endDate) {
-            return res.status(400).json({ message: 'User ID, start date, and end date are required' });
+        if (!userId || !startDate || !endDate || !deliveryMethod) {
+            return res.status(400).json({ message: 'User ID, start date, end date, and deliveryMethod are required' });
+        }
+
+        const finalRecipientEmail = deliveryMethod === 'email' ? userEmail : recipientEmail;
+
+        if (deliveryMethod === 'email' && !finalRecipientEmail) {
+            return res.status(400).json({ message: 'Email is required when deliveryMethod is "email"' });
         }
 
         await attendanceService.generateUserAttendanceHistoryPDF(req, res, userId);
     } catch (error) {
         console.error('Error generating user attendance history PDF:', error);
         res.status(500).json({ message: 'Failed to generate user attendance history PDF' });
+    }
+};
+
+exports.getUserTagsAttendanceReport = async (req, res) => {
+    try {
+        const { startDate, endDate, deliveryMethod, recipientEmail, userTags } = req.query;
+
+        if (!startDate || !endDate) {
+            return res.status(400).json({ message: 'Start and end dates are required.' });
+        }
+
+        // Convert userTags to array if provided
+        const userTagsArray = userTags ? userTags.split(',') : [];
+
+        const result = await attendanceService.generateUserTagsAttendanceReportPDF(
+            startDate, endDate, userTagsArray, deliveryMethod, recipientEmail
+        );
+
+        if (!result.success) {
+            return res.status(404).json({ message: result.message });
+        }
+
+        // If deliveryMethod is "download", return PDF response
+        if (deliveryMethod === 'download') {
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename=attendance_report.pdf`);
+            return res.end(result.pdfBuffer);
+        }
+
+        // If deliveryMethod is "email", return success response
+        return res.status(200).json({ message: result.message });
+
+    } catch (error) {
+        console.error('❌ Error:', error);
+        res.status(500).json({ message: 'Internal Server Error' });
     }
 };

@@ -88,13 +88,17 @@ class AttendanceRegularizationService {
 
   async updateAttendanceStatus(id, status, user, reason) {
 
+    if (!user || !user.email) {
+      throw new Error('Authenticated user information is required.');
+  }
+
     const managers = await User.find({ role: 3 });
         console.log(managers); // All managers with the updated 'manager' field
 
     // Ensure the authenticated user owns the attendance record
     return AttendanceRegularization.findOneAndUpdate(
       { _id: id, userId: user.id },
-      { status, reason }, // Include reason if provided
+      { status, reason, approvedBy: user.email }, // Include reason if provided
       { new: true }
     );
   }

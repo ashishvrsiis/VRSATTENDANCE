@@ -21,20 +21,6 @@ const register = async (req, res) => {
     }
 };
 
-// const login = async (req, res) => {
-//     try {
-//         const { email, password } = req.body;
-//         const response = await authService.loginUser(email, password);
-//         res.status(200).json(response);
-
-//         const managers = await User.find({ role: 3 });
-//         console.log(managers); // All managers with the updated 'manager' field
-
-//     } catch (error) {
-//         res.status(400).json({ message: error.message });
-//     }
-// };
-
 const login = async (req, res) => {
     try {
         const { email, password } = req.body;

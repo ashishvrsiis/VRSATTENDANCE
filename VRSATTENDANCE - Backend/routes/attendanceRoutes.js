@@ -16,5 +16,6 @@ router.get('/CurrentUser/excel/attendance-report', authenticateToken, attendance
 router.get('/user/:userId/excel/attendance-report', authenticateToken, attendanceController.getUserAttendanceHistoryExcel);
 router.get('/user/:userId/pdf/attendance-report', authenticateToken, attendanceController.getUserAttendanceHistoryPDF);
 router.get('/history/all-users', attendanceController.getAllUsersAttendanceHistory);
+router.get('/UserTags/pdf/attendance-report', attendanceController.getUserTagsAttendanceReport);
 
 module.exports = router;

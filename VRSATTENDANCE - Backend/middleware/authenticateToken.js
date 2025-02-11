@@ -40,6 +40,7 @@ const authenticateToken = async (req, res, next) => {
         req.user = {
             userId: user._id,
             role: user.role,
+            email: user.email,
             manager: user.manager, // Include the 'manager' field
             tokenType: decoded.tokenType
         };

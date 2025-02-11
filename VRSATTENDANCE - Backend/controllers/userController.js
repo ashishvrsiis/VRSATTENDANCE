@@ -259,3 +259,18 @@ exports.editUser = async (req, res) => {
         res.status(403).json({ message: error.message });
     }
 };
+
+exports.assignUserProjectTag = async (req, res) => {
+    try {
+        const { userId, projectTag } = req.body;
+
+        if (!userId || !projectTag) {
+            return res.status(400).json({ message: 'User ID and Project Tag are required' });
+        }
+
+        const updatedUser = await userService.assignUserProjectTag(userId, projectTag);
+        res.status(200).json({ message: 'Project tag assigned successfully', user: updatedUser });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};

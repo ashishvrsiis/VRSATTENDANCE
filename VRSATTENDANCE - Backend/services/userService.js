@@ -136,3 +136,17 @@ exports.editUser = async (userId, updateData, requester) => {
     await userToEdit.save();
     return userToEdit;
 };
+
+exports.assignUserProjectTag = async (userId, projectTag) => {
+    try {
+        const user = await User.findById(userId);
+        if (!user) {
+            throw new Error('User not found');
+        }
+        user.UserTags = projectTag;
+        await user.save();
+        return user;
+    } catch (error) {
+        throw new Error(error.message);
+    }
+};

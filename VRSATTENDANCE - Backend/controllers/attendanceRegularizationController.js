@@ -43,9 +43,17 @@ class AttendanceRegularizationController {
 }
 
   async updateAttendanceStatus(req, res) {
+
+    console.log('Authenticated user:', req.user);
+    
     try {
       const { id } = req.params;
       const { status, reason } = req.body; // Get status and reason from the request body
+
+      if (!req.user || !req.user.email) {
+        return res.status(401).json({ error: 'User not authenticated or missing email.' });
+    }
+
       const updatedAttendance = await attendanceRegularizationService.updateAttendanceStatus(id, status, req.user, reason);
       res.status(200).json(updatedAttendance);
     } catch (error) {

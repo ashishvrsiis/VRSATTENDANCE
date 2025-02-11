@@ -46,6 +46,14 @@
             max-height: 100px;
             object-fit: cover;
         }
+        .summary-table {
+            margin-top: 20px;
+            width: 50%;
+        }
+        .summary-table th {
+            background-color: #28a745;
+            color: white;
+        }
     </style>
 </head>
 <body>
@@ -55,30 +63,56 @@
     </div>
     <div id="user-reports">
         {{#each users}}
-    <div class="user-section">
-        <div class="user-name">User: {{name}}</div>
-        <div class="user-email">Email: {{email}}</div>
-        <div class="user-phone">Phone: {{phone}}</div>
-        <div class="user-dateOfBirth">Date of Birth: {{dateOfBirth}}</div>
-        <div class="user-fatherName">Father Name: {{fatherName}}</div>
-        <div class="user-position">Position: {{position}}</div>
-        <div class="user-employeeId">Employee Id: {{employeeId}}</div>
-        <div class="user-managerName">Manager Name: {{managerName}}</div>
-        <div class="user-managerRole">Manager Role: {{managerRole}}</div>
-        <div class="user-workLocation">Work Location: {{workLocation}}</div>
-        <div class="user-plazaName">Plaza Name: {{plazaName}}</div>
-        <table>
-            <tr>
-                <th>Serial No</th><th>Image</th><th>Date</th><th>Status</th><th>Punch-In Time</th><th>Punch-Out Time</th><th>Working Hours</th>
-            </tr>
-            {{#each attendanceRecords}}
-            <tr>
-                <td>{{serialNo}}</td><td><img src="{{image}}"></td><td>{{date}}</td><td>{{status}}</td><td>{{punchIn}}</td><td>{{punchOut}}</td><td>{{totalWorkingHours}}</td>
-            </tr>
-            {{/each}}
-        </table>
-    </div>
-    {{/each}}
+        <div class="user-section">
+            <div class="user-name">User: {{name}}</div>
+            <div class="user-email">Email: {{email}}</div>
+            <div class="user-phone">Phone: {{phone}}</div>
+            <div class="user-dateOfBirth">Date of Birth: {{dateOfBirth}}</div>
+            <div class="user-fatherName">Father Name: {{fatherName}}</div>
+            <div class="user-position">Position: {{position}}</div>
+            <div class="user-employeeId">Employee Id: {{employeeId}}</div>
+            <div class="user-managerName">Manager Name: {{managerName}}</div>
+            <div class="user-managerRole">Manager Role: {{managerRole}}</div>
+            <div class="user-workLocation">Work Location: {{workLocation}}</div>
+            <div class="user-plazaName">Plaza Name: {{plazaName}}</div>
+            
+            <table>
+                <tr>
+                    <th>Serial No</th><th>Image</th><th>Date</th><th>Status</th><th>Punch-In Time</th><th>Punch-Out Time</th><th>Working Hours</th><th>Attendance Regularized</th><th>Attendance Regularization Approved By</th>
+                </tr>
+                {{#each attendanceRecords}}
+                <tr>
+                    <td>{{serialNo}}</td>
+                    <td><img src="{{image}}"></td>
+                    <td>{{date}}</td>
+                    <td>{{status}}</td>
+                    <td>{{punchIn}}</td>
+                    <td>{{punchOut}}</td>
+                    <td>{{totalWorkingHours}}</td>
+                    <td>{{attendanceRegularized}}</td>
+                    <td>{{approvedBy}}</td>
+                </tr>
+                {{/each}}
+            </table>
+
+            <!-- Summary Section -->
+            <h3>Summary for {{name}}</h3>
+            <table class="summary-table">
+                <tr>
+                    <th>Total Days</th>
+                    <th>Total Present</th>
+                    <th>Total Leaves</th>
+                    <th>Total Paid Days</th>
+                </tr>
+                <tr>
+                    <td>{{summary.totalDays}}</td>
+                    <td>{{summary.totalPresent}}</td>
+                    <td>{{summary.totalLeaves}}</td>
+                    <td>{{summary.totalPaidDays}}</td>
+                </tr>
+            </table>
+        </div>
+        {{/each}}
     </div>
 </body>
 </html>

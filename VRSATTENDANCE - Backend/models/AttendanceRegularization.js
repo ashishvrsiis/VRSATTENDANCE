@@ -8,7 +8,9 @@ const AttendanceSchema = new mongoose.Schema({
   remarks: { type: String },
   leaveType: { type: String, required: true },
   status: { type: String, enum: ['Submitted', 'Approved', 'Rejected'], default: 'Submitted' },
-  reason: { type: String } // Optional reason
+  reason: { type: String }, // Optional reason
+  approvedBy: { type: String },
+  updatedAt: { type: Date, default: Date.now },
 });
 
 module.exports = mongoose.model('AttendanceRegularization', AttendanceSchema);

@@ -13,6 +13,7 @@ const registerUser = async (userData, currentUser) => {
     console.log('Current user details:', currentUser);
     const {
         name,
+        fatherName,
         email,
         password,
         re_password,
@@ -24,7 +25,9 @@ const registerUser = async (userData, currentUser) => {
         managerRole,
         workLocation,
         website,
-        employeeId
+        employeeId,
+        manager,
+        UserTags
     } = userData;
 
     try {
@@ -61,7 +64,7 @@ const registerUser = async (userData, currentUser) => {
         console.log('Super Admin attempting to register a user');
         if (![2, 3].includes(role)) {
             console.error('Super Admin attempted to register an invalid role:', role);
-            throw new Error('Super Admin can only register Admins and Managers/Employees');
+            throw new Error('Super Admin can only register roles 1, 2, and 3');
         }
     } else if (currentUserRole === 2) {
         // Admin can register only role 3 (Managers/Employees)
@@ -71,19 +74,15 @@ const registerUser = async (userData, currentUser) => {
             throw new Error('Admins can only register Managers/Employees');
         }
     } else if (currentUserRole === 3) {
-        // Managers
+        // Manager can register only employees with `manager: false`
         console.log('Manager attempting to register a user');
         if (!isManagerTrue) {
             console.error('Manager does not have sufficient permissions (manager=false)');
             throw new Error('Access denied. Only managers with the appropriate permissions can register new accounts.');
         }
-        if (role !== 3) {
-            console.error('Manager attempted to register an invalid role:', role);
-            throw new Error('Managers can only register Managers with "manager: false"');
-        }
-        if (userData.manager) {
-            console.error('Manager attempted to register another manager with "manager: true"');
-            throw new Error('Managers cannot create other managers with "manager: true".');
+        if (role !== 3 || manager) {
+            console.error('Manager attempted to register an invalid role or manager=true');
+            throw new Error('Managers can only register Employees with "manager: false".');
         }
     } else {
         console.error('Unauthorized user role attempting to register a user:', currentUserRole);
@@ -107,16 +106,19 @@ const registerUser = async (userData, currentUser) => {
 
     console.log('Creating new user with the following data:', {
         name,
+        fatherName,
         email,
         role,
         phone,
         position,
         managerId,
-        workLocation
+        workLocation,
+        UserTags
     });
 
     const user = new User({
         name,
+        fatherName,
         email,
         password,
         role,
@@ -130,7 +132,8 @@ const registerUser = async (userData, currentUser) => {
         website,
         employeeId,
         isApproved: false,
-        isEmailVerified: false
+        isEmailVerified: false,
+        UserTags
     });
 
     // Save user to the database

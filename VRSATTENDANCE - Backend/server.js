@@ -4,6 +4,7 @@ const http = require('http');
 const express = require('express');
 const WebSocket = require('ws');
 const dotenv = require('dotenv');
+const cors = require('cors');
 const connectDB = require('./config/database');
 const authRoutes = require('./routes/authRoutes');
 const tokenRoutes = require('./routes/tokenRoutes');
@@ -28,11 +29,14 @@ const locationRoutes = require('./routes/locationRoutes');
 const tollRoutes = require('./routes/tollRoutes');
 const pdfRoutes = require("./routes/pdfRoutes");
 const teamRoutes = require('./routes/teamRoutes');
+const userProjectTagRoutes = require('./routes/userProjectTagRoutes');
 
 dotenv.config();
 
 const app = express();
 app.use(express.json());
+
+app.use(cors());
 
 connectDB();
 
@@ -62,6 +66,7 @@ app.use('/api/location', locationRoutes);
 app.use('/api/v1', tollRoutes);
 app.use("/api/v1", pdfRoutes);
 app.use('/api/v1', teamRoutes);
+app.use('/api/v1', userProjectTagRoutes);
 
 const server = http.createServer(app);
 
@@ -75,7 +80,7 @@ setupWebSocket(wss);
 // const certificate = fs.readFileSync(certificatePath, 'utf8');
 // const credentials = {key: privatekey, cert: certificate};
 
-const PORT = process.env.PORT || 2000;
+const PORT = process.env.PORT || 3000;
 const httpServer = http.createServer(app);
 httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`HTTP Server is running on port ${PORT}`);
