@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 
 const userSchema = new mongoose.Schema({
     name: { type: String, required: true },
-    fatherName: { type: String, required: true },
+    fatherName: { type: String },
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
     role: { type: Number, enum: [1, 2, 3], required: true },
@@ -26,7 +26,7 @@ const userSchema = new mongoose.Schema({
     otpExpires: { type: Date },
     manager: { type: Boolean, default: false },
     otpEnabled: { type: Boolean, default: false },
-    UserTags: { type: String }
+    UserTags: { type: [String], default: [] }
 });
 
 

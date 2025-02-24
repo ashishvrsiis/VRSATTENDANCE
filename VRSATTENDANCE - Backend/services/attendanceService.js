@@ -134,6 +134,7 @@ exports.markAttendance = async (userId, today, status, data) => {
 
     // Check if the location is within 1 km of any toll plaza
     let withinRange = false;
+    let plazaName = null;
     const userLat = parseFloat(data.latitude);
     const userLon = parseFloat(data.longitude);
 
@@ -146,6 +147,7 @@ exports.markAttendance = async (userId, today, status, data) => {
 
         if (distance <= 1) {
             withinRange = true;
+            plazaName = plaza.LocationName;
             break; // No need to check further if within range
         }
     }
@@ -165,11 +167,13 @@ exports.markAttendance = async (userId, today, status, data) => {
                 userId,
                 date: today,
                 punchIn: new Date(),
+                plazaName,
                 ...data
             });
             console.log('Created new attendance record:', attendance);
         } else {
             attendance.punchIn = new Date();
+            attendance.plazaName = plazaName;
             Object.assign(attendance, data);
             console.log('Updated existing attendance record for start:', attendance);
         }
@@ -234,7 +238,7 @@ exports.markAttendance = async (userId, today, status, data) => {
         return { message: `Shift ${status} marked successfully. Please regularize your attendance as it is outside the toll plaza range.` };
     }
 
-    return { message: `Shift ${status} marked successfully.` };
+    return { message: `Shift ${status} marked successfully at ${plazaName}.` };
 };
 
 exports.getAttendanceByDateRange = async (userId, startDate, endDate) => {
@@ -323,10 +327,13 @@ exports.getAttendanceByDateRange = async (userId, startDate, endDate) => {
                     totalWorkingHours = isRegularized ? 'Attendance Regularized' : 'No working hours';
                 }
 
+                console.log(`Raw PunchIn:`, record.punchIn);
+                console.log(`Raw PunchOut:`, record.punchOut);
+
                 return {
                     date: record.date,
-                    punchIn: record.punchIn ? record.punchIn.toISOString() : null,
-                    punchOut: record.punchOut ? record.punchOut.toISOString() : null,
+                    punchIn: record.punchIn ? new Date(record.punchIn).toISOString() : null,
+                    punchOut: record.punchOut ? new Date(record.punchOut).toISOString() : null,
                     shift_start_marked: shiftStartMarked,
                     shift_end_marked: shiftEndMarked,
                     image: record.image ? `data:image/jpeg;base64,${record.image}` : '', // Include base64 image
@@ -583,6 +590,7 @@ exports.generateAttendanceReportPDF = async (startDate, endDate, req, res, deliv
                         const duration = moment.duration(punchOut.diff(punchIn));
                         const hours = duration.hours();
                         const minutes = duration.minutes();
+                        
                         totalWorkingHours = `${hours} Hours${minutes > 0 ? ` ${minutes} Minutes` : ''}`;
                 
                         if (hours >= 8) {
@@ -646,7 +654,7 @@ exports.generateAttendanceReportPDF = async (startDate, endDate, req, res, deliv
             endDate: moment(endDate).format('MMMM Do, YYYY'),
             users: usersData,
         };
-
+        console.log('📌 Report Data:', JSON.stringify(reportData, null, 2));
         const htmlContent = template(reportData);
         console.log('✅ HTML content generated.');
         console.log('🚀 Launching Puppeteer...');
@@ -1976,107 +1984,485 @@ exports.generateUserAttendanceHistoryPDF = async (req, res, userId) => {
     }
 };
 
-exports.generateUserTagsAttendanceReportPDF = async (startDate, endDate, userTagsFilter, deliveryMethod, recipientEmail) => {
+exports.generateUserTagsAttendanceHistoryPDF = async (req, res, userTags) => {
     try {
-        console.log(`🔹 [START] Generating attendance report`);
-        console.log(`🔹 Start Date: ${startDate}, End Date: ${endDate}`);
-        console.log(`🔹 UserTags Filter: ${userTagsFilter || 'N/A'}`);
-        console.log(`🔹 Delivery Method: ${deliveryMethod}, Recipient Email: ${recipientEmail || 'N/A'}`);
+        const { startDate, endDate, deliveryMethod, recipientEmail } = req.query;
 
-        if (!Array.isArray(userTagsFilter) || userTagsFilter.length === 0) {
-            console.warn('⚠️ No UserTags provided. Skipping user fetch.');
-            return { success: false, message: 'No attendance records found' };
+        if (!startDate || !endDate) {
+            return res.status(400).json({ message: 'Start date and end date are required' });
         }
 
-        console.log('📌 Fetching users from the database...');
-        const users = await User.find({ UserTags: { $in: userTagsFilter } });
-        console.log(`✅ Total users found: ${users.length}`);
-
-        if (users.length === 0) {
-            console.warn('⚠️ No users found matching the provided UserTags.');
-            return { success: false, message: 'No attendance records found' };
+        if (!deliveryMethod || !['download', 'email'].includes(deliveryMethod)) {
+            return res.status(400).json({ message: 'Valid deliveryMethod (download or email) is required' });
         }
 
-        console.log('📌 Fetching attendance records for each user...');
+        const finalRecipientEmail = deliveryMethod === 'email' ? req.user?.email : recipientEmail;
+        if (deliveryMethod === 'email' && !finalRecipientEmail) {
+            return res.status(400).json({ message: 'Email is required when deliveryMethod is "email"' });
+        }
+
+        const users = await User.find({
+            UserTags: { $in: userTags.map(tag => tag.trim()) }
+        });
+
+        if (!users.length) {
+            return res.status(404).json({ message: 'No users found for the given tags' });
+        }
+
         const usersData = await Promise.all(users.map(async (user) => {
-            console.log(`👤 Processing User: ${user.name} (ID: ${user._id})`);
+            const attendanceRecords = await this.getAttendanceByDateRange(user._id.toString(), startDate, endDate).catch(() => []);
 
-            let attendanceRecords;
+            const regularizations = await AttendanceRegularization.find({
+                user: user._id,
+                startDate: { $lte: endDate },
+                endDate: { $gte: startDate },
+                status: 'Approved',
+            }).select('startDate endDate approvedBy').lean();
+
+            const regularizedDates = new Map();
+            regularizations.forEach(reg => {
+                let current = moment(reg.startDate);
+                let end = moment(reg.endDate);
+                while (current.isSameOrBefore(end)) {
+                    regularizedDates.set(current.format('DD-MM-YYYY'), reg.approvedBy);
+                    current.add(1, 'days');
+                }
+            });
+
+            let totalDays = moment(endDate).diff(moment(startDate), 'days') + 1;
+            let totalPresent = 0;
+            let totalLeaves = 0;
+            let totalPaidDays = 0;
+
+            const processedAttendanceRecords = attendanceRecords.map((record, index) => {
+                const punchIn = record.punchIn ? moment(record.punchIn) : null;
+                const punchOut = record.punchOut ? moment(record.punchOut) : null;
+                let status = 'Absent';
+                let totalWorkingHours = record.totalWorkingHours || 'N/A';
+
+                if (totalWorkingHours === 'Shift not marked end' || record.attendanceRegularized === 'Yes') {
+                    status = 'Present';
+                    totalWorkingHours = '8 Hours';
+                } else if (punchIn && punchOut) {
+                    const duration = moment.duration(punchOut.diff(punchIn));
+                    let hours = duration.hours();
+                    let minutes = duration.minutes();
+
+                    if (hours >= 8 || (hours === 7 && minutes >= 1) || hours > 8) {
+                        hours = 8;
+                        minutes = 0;
+                    }
+
+                    totalWorkingHours = `${hours} Hours${minutes > 0 ? ` ${minutes} Minutes` : ''}`;
+
+                    if (hours >= 8) {
+                        status = 'Present';
+                    } else if (hours > 0) {
+                        status = 'Half Day Present';
+                    }
+                }
+
+                if (status === 'Present') totalPresent += 1;
+                else if (status === 'Half Day Present') totalPresent += 0.5;
+
+                const dateKey = moment(record.date).format('DD-MM-YYYY');
+                if (regularizedDates.has(dateKey)) {
+                    status = 'Regularized';
+                    totalWorkingHours = '8 Hours';
+                }
+
+                return {
+                    serialNo: index + 1,
+                    image: record.image,
+                    date: dateKey,
+                    punchIn: punchIn ? punchIn.format('hh:mm A') : 'N/A',
+                    punchOut: punchOut ? punchOut.format('hh:mm A') : 'N/A',
+                    totalWorkingHours,
+                    status,
+                    attendanceRegularized: regularizedDates.has(dateKey) ? 'Yes' : 'No',
+                    approvedBy: regularizedDates.get(dateKey) || 'N/A',
+                };
+            });
+
             try {
-                attendanceRecords = await exports.getAttendanceByDateRange(user._id.toString(), startDate, endDate);
-                console.log(`✅ Attendance records fetched for ${user.name}: ${attendanceRecords.length} records found.`);
+                const leaveRequests = await leaveService.getLeaveRequests(user._id, req.user?.role);
+                totalLeaves = leaveRequests.length;
             } catch (err) {
-                console.error(`❌ Error fetching attendance for ${user.name}:`, err);
-                attendanceRecords = [];
+                console.error(`Error fetching leave requests for user ${user._id}:`, err);
             }
 
-            console.log(`📌 Raw Attendance Data for ${user.name}:`, JSON.stringify(attendanceRecords, null, 2));
-
-            // Ensure proper date formatting for the report
-            const formattedAttendance = attendanceRecords.map(record => ({
-                date: record.date,
-                punchIn: record.punchIn ? moment(record.punchIn).format('YYYY-MM-DD HH:mm:ss') : 'N/A',
-                punchOut: record.punchOut ? moment(record.punchOut).format('YYYY-MM-DD HH:mm:ss') : 'N/A',
-                present: record.present,
-                absent: record.absent,
-                totalWorkingHours: record.totalWorkingHours,
-                image: record.image // Base64 encoded image
-            }));
-
-            console.log(`✅ Formatted Attendance Data for ${user.name}:`, JSON.stringify(formattedAttendance, null, 2));
+            totalPaidDays = totalPresent + totalLeaves;
 
             return {
-                name: user.name,
-                email: user.email,
-                phone: user.phone,
-                position: user.position,
-                workLocation: user.workLocation,
-                UserTags: user.UserTags,
-                attendance: formattedAttendance // Attach formatted attendance data
+                name: user.name || 'Not provided',
+                email: user.email || 'Not provided',
+                phone: user.phone || 'Not provided',
+                dateOfBirth: user.dateOfBirth ? moment(user.dateOfBirth).format('DD-MM-YYYY') : 'Not provided',
+                fatherName: user.fatherName || 'Not provided',
+                position: user.position || 'Not provided',
+                employeeId: user.employeeId || 'Not provided',
+                managerName: user.managerName || 'Not provided',
+                managerRole: user.managerRole || 'Not provided',
+                workLocation: user.workLocation || 'Not provided',
+                plazaName: user.plazaName || 'Not provided',
+                attendanceRecords: processedAttendanceRecords,
+                summary: {
+                    totalDays,
+                    totalPresent,
+                    totalLeaves,
+                    totalPaidDays,
+                },
             };
         }));
 
-        console.log('✅ Attendance records fetched successfully.');
-
         const templatePath = path.join(__dirname, '..', 'templates', 'AttendanceReportUI.html');
-        let templateSource = fs.readFileSync(templatePath, 'utf-8');
+        const templateSource = fs.readFileSync(templatePath, 'utf-8');
         const template = handlebars.compile(templateSource);
-        console.log('✅ Template compiled.');
-
-        const reportData = {
-            startDate: moment(startDate).format('MMMM Do, YYYY'),
-            endDate: moment(endDate).format('MMMM Do, YYYY'),
-            users: usersData
-        };
-
-        const htmlContent = template(reportData);
-        console.log('✅ HTML content generated.');
+        const htmlContent = template({ startDate, endDate, users: usersData });
 
         const browser = await puppeteer.launch();
         const page = await browser.newPage();
         await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
-
         const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
         await browser.close();
-        console.log('📄 PDF Generated.');
 
-        if (deliveryMethod === 'email') {
-            if (!recipientEmail) return { success: false, message: 'Recipient email is required.' };
-
-            await sendEmailWithAttachment(recipientEmail, { buffer: pdfBuffer }, {
+        if (deliveryMethod === 'download') {
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.pdf`);
+            return res.end(pdfBuffer);
+        } else if (deliveryMethod === 'email') {
+            await sendEmailWithAttachment(finalRecipientEmail, { buffer: pdfBuffer }, {
                 subject: 'Attendance Report',
-                name: 'User',
+                name: req.user?.name || 'User',
                 message: 'Please find your attendance report attached.',
-                fileType: 'pdf'
+                fileType: 'pdf',
             });
-            console.log('✅ Email sent successfully.');
-            return { success: true, message: 'Attendance report emailed successfully.' };
+            return res.status(200).json({ message: 'Attendance report emailed successfully.' });
+        } else {
+            return res.status(400).json({ message: 'Invalid delivery method.' });
+        }
+    } catch (error) {
+        console.error('Error generating PDF report:', error);
+        res.status(500).json({ message: 'Failed to generate the report.' });
+    }
+};
+
+exports.generateUserTagsAttendanceHistoryExcel = async (req, res, userTags) => {
+    try {
+        const currentUser = req.user;
+        const { startDate, endDate, deliveryMethod, recipientEmail } = req.query;
+
+        console.log(`Generating Excel report by user: ${currentUser.userId} (role: ${currentUser.role})`);
+        console.log(`Tags: ${userTags}, Date Range: ${startDate} - ${endDate}, Delivery: ${deliveryMethod}`);
+
+        if (![1, 2, 3].includes(currentUser.role) || (currentUser.role === 3 && !currentUser.manager)) {
+            return res.status(403).json({ message: 'Permission denied to generate this report' });
         }
 
-        return { success: true, pdfBuffer };
+        if (!startDate || !endDate) {
+            return res.status(400).json({ message: 'Start date and end date are required' });
+        }
 
+        const finalRecipientEmail = deliveryMethod === 'email' ? req.user?.email : recipientEmail;
+        if (deliveryMethod === 'email' && !finalRecipientEmail) {
+            return res.status(400).json({ message: 'Recipient email is required for email delivery method' });
+        }
+
+        const users = await User.find({ UserTags: { $in: userTags.map(tag => tag.trim()) } }).lean();
+
+        if (!users.length) {
+            return res.status(404).json({ message: 'No users found for the given tags' });
+        }
+
+        console.log(`Users fetched: ${users.length}`);
+
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = 'VRSIIS HRM';
+        workbook.created = new Date();
+
+        for (const user of users) {
+            console.log(`Processing user: ${user.name}`);
+
+            const attendanceRecords = await this.getAttendanceByDateRange(user._id.toString(), startDate, endDate).catch(() => []);
+
+            if (!attendanceRecords.length) {
+                console.log(`No attendance records for ${user.name}`);
+                continue;
+            }
+
+            let totalPresent = 0;
+            let totalLeaves = 0;
+            let totalPaidDays = 0;
+
+            const worksheet = workbook.addWorksheet(user.name || 'User Attendance');
+
+            const titleRow = worksheet.addRow(['User Tag Attendance History']);
+            worksheet.mergeCells(`A${titleRow.number}:H${titleRow.number}`);
+            titleRow.font = { bold: true, color: { argb: 'FFFFFF' }, size: 16 };
+            titleRow.alignment = { horizontal: 'center' };
+            titleRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '25325F' } };
+
+            const headerRow = worksheet.addRow([
+                'S.No',
+                'Date',
+                'Image',
+                'Punch In',
+                'Punch Out',
+                'Total Working Hours',
+                'Status',
+                'Regularized',
+                'Approved By'
+            ]);
+            headerRow.font = { bold: true, color: { argb: 'FFFFFF' } };
+            headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F7A832' } };
+            headerRow.eachCell(cell => {
+                cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+            });
+
+            worksheet.columns = [
+                { header: 'S.No', key: 'serialNo', width: 10 },
+                { header: 'Date', key: 'date', width: 15 },
+                { header: 'Image', key: 'image', width: 20 },
+                { header: 'Punch In', key: 'punchIn', width: 15 },
+                { header: 'Punch Out', key: 'punchOut', width: 15 },
+                { header: 'Total Working Hours', key: 'totalWorkingHours', width: 20 },
+                { header: 'Status', key: 'status', width: 15 },
+                { header: 'User Tag Attendance History', key: 'attendanceRegularized', width: 15 },
+                { header: '', key: 'approvedBy', width: 20 },
+            ];
+
+            attendanceRecords.forEach((record, index) => {
+                let status = 'Absent';
+                const punchIn = record.punchIn ? moment(record.punchIn) : null;
+                const punchOut = record.punchOut ? moment(record.punchOut) : null;
+                let totalWorkingHours = record.totalWorkingHours || 'N/A';
+
+                if (punchIn && punchOut) {
+                    const duration = moment.duration(punchOut.diff(punchIn));
+                    const hours = Math.floor(duration.asHours());
+                    const minutes = duration.minutes();
+
+                    totalWorkingHours = `${hours} Hours${minutes > 0 ? ` ${minutes} Minutes` : ''}`;
+                    if (hours > 0 || minutes >= 1) status = 'Present';
+                    else status = 'Absent';
+                } else if (punchIn || record.attendanceRegularized) {
+                    totalWorkingHours = punchIn ? 'Shift Not Marked End' : 'N/A';
+                    status = 'Present';
+                }
+
+                if (status === 'Present') totalPresent += 1;
+                if (status === 'Half Day Present') totalPresent += 0.5;
+
+                const row = worksheet.addRow({
+                    serialNo: index + 1,
+                    date: moment(record.date).format('DD-MM-YYYY'),
+                    image: '',
+                    punchIn: punchIn ? punchIn.format('hh:mm A') : 'N/A',
+                    punchOut: punchOut ? punchOut.format('hh:mm A') : 'N/A',
+                    totalWorkingHours,
+                    status,
+                    attendanceRegularized: record.attendanceRegularized ? 'Yes' : 'No',
+                    approvedBy: record.approvedBy || 'N/A',
+                });
+
+                const currentRowIndex = row.number;
+
+                if (record.image) {
+                    const imageBuffer = Buffer.from(record.image.split(',')[1], 'base64');
+                    const imageId = workbook.addImage({
+                        buffer: imageBuffer,
+                        extension: 'jpeg',
+                    });
+                
+                    // Set proper height and width for consistent appearance
+                    worksheet.getRow(currentRowIndex).height = 80;
+                    worksheet.getColumn(3).width = 25;
+                
+                    // Adjust image placement within the single cell
+                    worksheet.addImage(imageId, {
+                        tl: { col: 2, row: currentRowIndex - 1 },  // Fine-tuned placement
+                        ext: { width: 100, height: 80 },               // Adjust dimensions for better fit
+                        editAs: 'oneCell',
+                    });
+                }                
+            });
+
+            try {
+                const leaveRequests = await leaveService.getLeaveRequests(user._id, user.role);
+                totalLeaves = leaveRequests.length;
+            } catch (err) {
+                console.error(`Error fetching leave requests for ${user.name}:`, err);
+            }
+
+            totalPaidDays = totalPresent + totalLeaves;
+
+            worksheet.addRow([]);
+            const summaryTitleRow = worksheet.addRow(['Summary']);
+            worksheet.mergeCells(`A${summaryTitleRow.number}:B${summaryTitleRow.number}`);
+            summaryTitleRow.font = { bold: true, color: { argb: 'FFFFFF' }, size: 14 };
+            summaryTitleRow.alignment = { horizontal: 'center' };
+            summaryTitleRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '25325F' } };
+            worksheet.addRow(['Total Days', attendanceRecords.length]);
+            worksheet.addRow(['Total Present', totalPresent]);
+            worksheet.addRow(['Total Leaves', totalLeaves]);
+            worksheet.addRow(['Total Paid Days', totalPaidDays]);
+        }
+
+        const buffer = await workbook.xlsx.writeBuffer();
+
+        if (deliveryMethod === 'download') {
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.xlsx`);
+            res.end(buffer);
+        } else if (deliveryMethod === 'email') {
+            await sendxlsxEmailWithAttachment(finalRecipientEmail, { buffer }, {
+                subject: 'Attendance Report (Excel)',
+                name: req.user?.name || 'User',
+                message: 'Please find your attendance report attached in Excel format.',
+                fileType: 'xlsx',
+            });
+            return res.status(200).json({ message: 'Attendance report emailed successfully.' });
+        }
     } catch (error) {
-        console.error('❌ Error generating report:', error);
-        return { success: false, message: 'Failed to generate the report.' };
+        console.error('Error generating Excel report:', error);
+        res.status(500).json({ message: 'Failed to generate the Excel report.' });
+    }
+};
+
+exports.generateAttendanceReportByPlaza = async (startDate, endDate, plazaName, req, res, deliveryMethod, recipientEmail) => {
+    try {
+        console.log(`\n🔹 [START] Generating Attendance Report`);
+        console.log(`📅 Start Date: ${startDate}, End Date: ${endDate}`);
+        console.log(`🏢 Plaza Name: "${plazaName}"`);
+        console.log(`📤 Delivery Method: ${deliveryMethod}`);
+        console.log(`📧 Recipient Email: ${recipientEmail || 'N/A'}`);
+
+        if (!startDate || !endDate || !plazaName) {
+            console.error('❌ Missing required parameters: Start date, end date, or plaza name.');
+            return res.status(400).json({ message: 'Start date, end date, and plaza name are required.' });
+        }
+
+        const normalizedDeliveryMethod = (deliveryMethod || '').toLowerCase();
+        if (!['download', 'email'].includes(normalizedDeliveryMethod)) {
+            console.error('❌ Invalid delivery method:', deliveryMethod);
+            return res.status(400).json({ message: 'Invalid delivery method. Use "download" or "email".' });
+        }
+
+        console.log(`📌 Fetching attendance records for plaza: "${plazaName}"...`);
+        const attendanceRecords = await Attendance.find({
+            plazaName: { $regex: new RegExp(`^${plazaName.trim()}$`, 'i') },
+            date: { $gte: startDate, $lte: endDate }
+        }).sort({ userId: 1 });
+
+        if (attendanceRecords.length === 0) {
+            console.warn(`⚠️ No attendance records found for the specified plaza: "${plazaName}"`);
+            return res.status(404).json({ message: 'No attendance records found for the specified plaza.' });
+        }
+
+        const userIds = [...new Set(attendanceRecords.map(record => record.userId))];
+        const users = await User.find({ _id: { $in: userIds } }).sort({ _id: 1 });
+        let serialCounter = 1;
+        let totalPresent = 0;
+        let totalAbsent = 0;
+        let totalRegularized = 0;
+
+        console.log(`🔍 Processing ${users.length} users and ${attendanceRecords.length} attendance records...`);
+        const processedUsers = await Promise.all(
+            users.map(async (user) => {
+                const records = attendanceRecords.filter(record => record.userId.toString() === user._id.toString());
+
+                const regularizations = await AttendanceRegularization.find({
+                    user: user._id,
+                    startDate: { $lte: endDate },
+                    endDate: { $gte: startDate },
+                    status: 'Approved',
+                }).select('startDate endDate approvedBy').lean();
+
+                const regularizedDates = new Map();
+                regularizations.forEach(reg => {
+                    let current = moment(reg.startDate);
+                    let end = moment(reg.endDate);
+                    while (current.isSameOrBefore(end)) {
+                        regularizedDates.set(current.format('DD-MM-YYYY'), reg.approvedBy);
+                        current.add(1, 'days');
+                    }
+                });
+
+                const attendanceData = records.map(record => {
+                    const formattedDate = moment(record.date).format('DD-MM-YYYY');
+                    const status = record.punchIn && record.punchOut ? 'Present' : 'Absent';
+                    const regularized = regularizedDates.has(formattedDate) ? 'Yes' : 'No';
+                    const approvedBy = regularizedDates.get(formattedDate) || 'N/A';
+                    const workingHours = (record.punchIn && record.punchOut)
+                        ? `${moment.duration(moment(record.punchOut).diff(moment(record.punchIn))).hours()}h ${moment.duration(moment(record.punchOut).diff(moment(record.punchIn))).minutes()}m`
+                        : 'Shift not marked end';
+
+                    if (status === 'Present') totalPresent++;
+                    else totalAbsent++;
+
+                    if (regularized === 'Yes') totalRegularized++;
+
+                    console.log(`📅 Date: ${formattedDate} | Status: ${status} | Working Hours: ${workingHours} | Regularized: ${regularized} | Approved By: ${approvedBy}`);
+
+                    return {
+                        serialNo: serialCounter++,
+                        image: record.image || 'N/A',
+                        date: formattedDate,
+                        punchIn: record.punchIn ? moment(record.punchIn).format('hh:mm A') : 'N/A',
+                        punchOut: record.punchOut ? moment(record.punchOut).format('hh:mm A') : 'N/A',
+                        workingHours,
+                        status,
+                        attendanceRegularized: regularized,
+                        attendanceRegularizedApprovedBy: approvedBy
+                    };
+                });
+
+                return {
+                    serialNo: serialCounter++,
+                    name: user?.name || 'Unknown',
+                    email: user?.email || 'N/A',
+                    employeeId: user?.employeeId || 'N/A',
+                    attendanceRecords: attendanceData,
+                };
+            })
+        );
+
+        console.log(`📌 Final Summary: Total Users: ${users.length}, Present: ${totalPresent}, Absent: ${totalAbsent}, Regularized: ${totalRegularized}`);
+        const summary = { totalUsers: users.length, totalPresent, totalAbsent, totalRegularized };
+
+        console.log('✅ Attendance Data Processed Successfully.');
+        const reportData = { startDate, endDate, users: processedUsers, summary };
+
+        console.log('📌 Compiling HTML report template...');
+        const htmlContent = handlebars.compile(fs.readFileSync('templates/AttendanceReportUI.html', 'utf-8'))(reportData);
+
+        console.log('🚀 Generating PDF Report...');
+        const browser = await puppeteer.launch();
+        const page = await browser.newPage();
+        await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
+        const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
+        await browser.close();
+        console.log('✅ PDF Report Generated Successfully.');
+
+        if (normalizedDeliveryMethod === 'download') {
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${plazaName.trim()}.pdf`);
+            return res.end(pdfBuffer);
+        } else if (normalizedDeliveryMethod === 'email') {
+            if (!recipientEmail) {
+                console.error('❌ Recipient email is missing for email delivery.');
+                return res.status(400).json({ message: 'Recipient email is required for emailing the report.' });
+            }
+            await sendEmailWithAttachment(recipientEmail, { buffer: pdfBuffer }, {
+                subject: 'Attendance Report',
+                name: req.user?.name || 'User',
+                message: 'Your attendance report is attached.'
+            });
+            console.log('📨 Email sent successfully!');
+            return res.status(200).json({ message: 'Attendance report emailed successfully.' });
+        }
+    } catch (error) {
+        console.error('❌ Error generating attendance report:', error);
+        return res.status(500).json({ message: 'Failed to generate the report.' });
     }
 };

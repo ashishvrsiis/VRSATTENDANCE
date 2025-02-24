@@ -485,37 +485,65 @@ exports.getUserAttendanceHistoryPDF = async (req, res) => {
     }
 };
 
-exports.getUserTagsAttendanceReport = async (req, res) => {
+exports.generateUserTagsAttendanceHistoryPDF = async (req, res) => {
     try {
-        const { startDate, endDate, deliveryMethod, recipientEmail, userTags } = req.query;
+        let { userTags } = req.query;
 
-        if (!startDate || !endDate) {
-            return res.status(400).json({ message: 'Start and end dates are required.' });
+        if (typeof userTags === 'string') {
+            userTags = userTags.split(','); // Convert to an array
         }
 
-        // Convert userTags to array if provided
-        const userTagsArray = userTags ? userTags.split(',') : [];
-
-        const result = await attendanceService.generateUserTagsAttendanceReportPDF(
-            startDate, endDate, userTagsArray, deliveryMethod, recipientEmail
-        );
-
-        if (!result.success) {
-            return res.status(404).json({ message: result.message });
+        if (!userTags || !Array.isArray(userTags) || userTags.length === 0) {
+            return res.status(400).json({ message: 'User tags are required and should be an array' });
         }
 
-        // If deliveryMethod is "download", return PDF response
-        if (deliveryMethod === 'download') {
-            res.setHeader('Content-Type', 'application/pdf');
-            res.setHeader('Content-Disposition', `attachment; filename=attendance_report.pdf`);
-            return res.end(result.pdfBuffer);
-        }
+        console.log('User Tags:', userTags);
 
-        // If deliveryMethod is "email", return success response
-        return res.status(200).json({ message: result.message });
+        // Call the service function, but don't expect a return value since it handles responses
+        await attendanceService.generateUserTagsAttendanceHistoryPDF(req, res, userTags);
 
     } catch (error) {
-        console.error('❌ Error:', error);
-        res.status(500).json({ message: 'Internal Server Error' });
+        console.error('Error generating attendance PDF:', error);
+        if (!res.headersSent) { // Prevent duplicate responses
+            res.status(500).json({ message: 'Internal Server Error' });
+        }
+    }
+};
+
+exports.generateUserTagsAttendanceHistoryExcel = async (req, res) => {
+    try {
+        let { userTags } = req.query;
+
+        if (typeof userTags === 'string') {
+            userTags = userTags.split(',');
+        }
+
+        if (!userTags || !Array.isArray(userTags) || userTags.length === 0) {
+            return res.status(400).json({ message: 'User tags are required and should be an array' });
+        }
+
+        await attendanceService.generateUserTagsAttendanceHistoryExcel(req, res, userTags);
+    } catch (error) {
+        console.error('Error generating attendance Excel:', error);
+        if (!res.headersSent) {
+            res.status(500).json({ message: 'Internal Server Error' });
+        }
+    }
+};
+
+exports.generateAttendanceReportByPlaza = async (req, res) => {
+    try {
+        const { startDate, endDate, plazaName, deliveryMethod, recipientEmail } = req.query;
+
+        if (!startDate || !endDate || !plazaName) {
+            return res.status(400).json({ message: 'Start date, end date, and plaza name are required.' });
+        }
+
+        console.log(`📅 Generating attendance report for Plaza: ${plazaName}, From: ${startDate} To: ${endDate}, Delivery: ${deliveryMethod}`);
+
+        await attendanceService.generateAttendanceReportByPlaza(startDate, endDate, plazaName, req, res, deliveryMethod, recipientEmail);
+    } catch (error) {
+        console.error('❌ Error generating attendance report:', error);
+        return res.status(500).json({ message: 'Failed to generate the attendance report.' });
     }
 };

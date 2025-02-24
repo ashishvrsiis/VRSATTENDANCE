@@ -42,7 +42,8 @@ const authenticateToken = async (req, res, next) => {
             role: user.role,
             email: user.email,
             manager: user.manager, // Include the 'manager' field
-            tokenType: decoded.tokenType
+            tokenType: decoded.tokenType,
+            UserTags: user.UserTags
         };
 
         console.log('Token verified, user:', req.user);

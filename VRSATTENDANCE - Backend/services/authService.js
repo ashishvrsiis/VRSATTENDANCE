@@ -142,10 +142,10 @@ const registerUser = async (userData, currentUser) => {
     console.log('User saved successfully:', user);
 
     // Notify admins if necessary
-    if ([1, 2].includes(currentUserRole)) {
-        console.log('Notifying admins for new user registration');
-        await notifyAdmins(user);
-    }
+    // if ([1, 2].includes(currentUserRole)) {
+    //     console.log('Notifying admins for new user registration');
+    //     await notifyAdmins(user);
+    // }
 
     console.log('Registration process completed successfully');
 
