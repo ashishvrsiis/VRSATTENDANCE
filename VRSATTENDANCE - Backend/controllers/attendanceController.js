@@ -547,3 +547,136 @@ exports.generateAttendanceReportByPlaza = async (req, res) => {
         return res.status(500).json({ message: 'Failed to generate the attendance report.' });
     }
 };
+
+exports.generatePlazaAttendanceHistoryExcel = async (req, res) => {
+    const { plazaIds } = req.query;
+    await attendanceService.generatePlazaAttendanceHistoryExcel(req, res, plazaIds);
+};
+
+exports.generateAllUsersAttendanceSummaryPDF = async (req, res) => {
+    try {
+        const { startDate, endDate, deliveryMethod, recipientEmail } = req.query;
+        const sanitizedStartDate = startDate || moment().startOf('month').format('YYYY-MM-DD');
+        const sanitizedEndDate = endDate || moment().endOf('month').format('YYYY-MM-DD');
+
+        await attendanceService.generateAllUsersAttendanceSummaryPDF(
+            sanitizedStartDate,
+            sanitizedEndDate,
+            req,
+            res,
+            deliveryMethod,
+            recipientEmail
+        );
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+exports.generateAllUsersAttendanceSummaryExcel = async (req, res) => {
+    try {
+        const { startDate, endDate, deliveryMethod, recipientEmail } = req.query;
+        const sanitizedStartDate = startDate || moment().startOf('month').format('YYYY-MM-DD');
+        const sanitizedEndDate = endDate || moment().endOf('month').format('YYYY-MM-DD');
+
+        await attendanceService.generateAllUsersAttendanceSummaryExcel(
+            sanitizedStartDate,
+            sanitizedEndDate,
+            req,
+            res,
+            deliveryMethod,
+            recipientEmail
+        );
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+exports.generateUserTagsAttendanceSummaryPDF = async (req, res) => {
+    try {
+        console.log('✅ req.query:', req.query); // Debugging
+
+        let userTags = req.query.userTags;
+        if (!userTags) {
+            console.error('❌ userTags is missing in query parameters');
+            return res.status(400).json({ message: 'User tags are required and should be an array or a comma-separated string' });
+        }
+
+        if (typeof userTags === 'string') {
+            console.log('🛠 Parsing userTags from string...');
+            userTags = userTags.split(',').map(tag => tag.trim()).filter(tag => tag);
+        }
+
+        if (!Array.isArray(userTags) || userTags.length === 0) {
+            console.error('❌ Validation Failed: userTags should be a non-empty array');
+            return res.status(400).json({ message: 'User tags should be an array' });
+        }
+
+        console.log('📤 Forwarding request to attendanceService.generateUserTagsAttendanceSummaryPDF');
+        await attendanceService.generateUserTagsAttendanceSummaryPDF(req, res, userTags);
+
+    } catch (error) {
+        console.error('❌ Unexpected Error:', error);
+        if (!res.headersSent) {
+            res.status(500).json({ message: 'Internal Server Error' });
+        }
+    }
+};
+
+exports.generateUserTagsAttendanceSummaryExcel = async (req, res) => {
+    try {
+        console.log('✅ req.query:', req.query);
+        let userTags = req.query.userTags;
+        if (!userTags) {
+            return res.status(400).json({ message: 'User tags are required and should be an array or a comma-separated string' });
+        }
+
+        if (typeof userTags === 'string') {
+            userTags = userTags.split(',').map(tag => tag.trim()).filter(tag => tag);
+        }
+
+        if (!Array.isArray(userTags) || userTags.length === 0) {
+            return res.status(400).json({ message: 'User tags should be a non-empty array' });
+        }
+
+        await attendanceService.generateUserTagsAttendanceSummaryExcel(req, res, userTags);
+    } catch (error) {
+        console.error('❌ Unexpected Error:', error);
+        if (!res.headersSent) {
+            res.status(500).json({ message: 'Internal Server Error' });
+        }
+    }
+};
+
+exports.generateAttendanceReportSummaryByPlaza = async (req, res) => {
+    try {
+        const { startDate, endDate, plazaName, deliveryMethod, recipientEmail } = req.query;
+
+        if (!startDate || !endDate || !plazaName) {
+            return res.status(400).json({ message: 'Start date, end date, and plaza name are required.' });
+        }
+
+        console.log(`📅 Generating attendance report for Plaza: ${plazaName}, From: ${startDate} To: ${endDate}, Delivery: ${deliveryMethod}`);
+
+        await attendanceService.generateAttendanceReportSummaryByPlaza(startDate, endDate, plazaName, req, res, deliveryMethod, recipientEmail);
+    } catch (error) {
+        console.error('❌ Error generating attendance report:', error);
+        return res.status(500).json({ message: 'Failed to generate the attendance report.' });
+    }
+};
+
+exports.generateAttendanceReportSummaryByPlazaExcel = async (req, res) => {
+    try {
+        const { startDate, endDate, plazaName, deliveryMethod, recipientEmail } = req.query;
+
+        if (!startDate || !endDate || !plazaName) {
+            return res.status(400).json({ message: 'Start date, end date, and plaza name are required.' });
+        }
+
+        console.log(`📅 Generating attendance report (Excel) for Plaza: ${plazaName}, From: ${startDate} To: ${endDate}, Delivery: ${deliveryMethod}`);
+
+        await attendanceService.generateAttendanceReportSummaryByPlazaExcel(startDate, endDate, plazaName, req, res, deliveryMethod, recipientEmail);
+    } catch (error) {
+        console.error('❌ Error generating attendance report (Excel):', error);
+        return res.status(500).json({ message: 'Failed to generate the attendance report.' });
+    }
+};

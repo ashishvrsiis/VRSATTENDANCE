@@ -15,6 +15,8 @@ router.post('/update-employee-id', authenticateToken, userController.updateEmplo
 router.delete('/users/:id', authenticateToken, userController.deleteUser);
 router.put('/users/:id', authenticateToken, userController.editUser);
 router.post('/user-project-tags/assign-project-tag', authenticateToken, authorizeAdmin, userController.assignUserProjectTag);
+router.put('/admin/update/:id', authenticateToken, userController.updateEmployee);
+
 
 
 module.exports = router;

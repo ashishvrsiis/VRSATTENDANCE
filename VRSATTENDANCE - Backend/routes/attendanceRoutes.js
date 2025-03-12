@@ -19,5 +19,15 @@ router.get('/history/all-users', attendanceController.getAllUsersAttendanceHisto
 router.get('/UserTags/pdf/attendance-report', authenticateToken, attendanceController.generateUserTagsAttendanceHistoryPDF);
 router.get('/UserTags/excel/attendance-report', authenticateToken, attendanceController.generateUserTagsAttendanceHistoryExcel);
 router.get('/pdf/generate-report-by-plaza', authenticateToken, attendanceController.generateAttendanceReportByPlaza);
+router.get('/excel/generate-report-by-plaza', authenticateToken, attendanceController.generatePlazaAttendanceHistoryExcel);
+router.get('/pdf/download-summary', authenticateToken, attendanceController.generateAllUsersAttendanceSummaryPDF);
+router.get('/excel/download-summary', authenticateToken, attendanceController.generateAllUsersAttendanceSummaryExcel);
+router.get('/pdf/generate-user-tags-summary', authenticateToken, attendanceController.generateUserTagsAttendanceSummaryPDF);
+router.get('/excel/generate-user-tags-summary', authenticateToken, attendanceController.generateUserTagsAttendanceSummaryExcel);
+router.get('/pdf/generate-plaza-name-summary', authenticateToken, attendanceController.generateAttendanceReportSummaryByPlaza);
+router.get('/excel/generate-plaza-name-summary', authenticateToken, attendanceController.generateAttendanceReportSummaryByPlazaExcel);
+
+
+
 
 module.exports = router;

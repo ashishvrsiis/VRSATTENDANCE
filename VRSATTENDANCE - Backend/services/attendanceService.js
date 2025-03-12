@@ -20,6 +20,8 @@ const { sendEmailWithAttachment } = require('../services/emailService');
 const { sendxlsxEmailWithAttachment} = require('../services/xlsxemailService');
 const leaveService = require('../services/leaveService');
 const { error } = require('console');
+const streamBuffers = require('stream-buffers');
+
 
 exports.getTodayAttendance = async (userId, date) => {
     try {
@@ -2362,9 +2364,12 @@ exports.generateAttendanceReportByPlaza = async (startDate, endDate, plazaName, 
         const userIds = [...new Set(attendanceRecords.map(record => record.userId))];
         const users = await User.find({ _id: { $in: userIds } }).sort({ _id: 1 });
         let serialCounter = 1;
+        let totalDays = moment(endDate).diff(moment(startDate), 'days') + 1;
         let totalPresent = 0;
+        let totalLeaves = 0;
         let totalAbsent = 0;
         let totalRegularized = 0;
+        let totalPaidDays = 0;
 
         console.log(`🔍 Processing ${users.length} users and ${attendanceRecords.length} attendance records...`);
         const processedUsers = await Promise.all(
@@ -2390,39 +2395,77 @@ exports.generateAttendanceReportByPlaza = async (startDate, endDate, plazaName, 
 
                 const attendanceData = records.map(record => {
                     const formattedDate = moment(record.date).format('DD-MM-YYYY');
-                    const status = record.punchIn && record.punchOut ? 'Present' : 'Absent';
+                    const status = 'Present';
                     const regularized = regularizedDates.has(formattedDate) ? 'Yes' : 'No';
                     const approvedBy = regularizedDates.get(formattedDate) || 'N/A';
-                    const workingHours = (record.punchIn && record.punchOut)
-                        ? `${moment.duration(moment(record.punchOut).diff(moment(record.punchIn))).hours()}h ${moment.duration(moment(record.punchOut).diff(moment(record.punchIn))).minutes()}m`
-                        : 'Shift not marked end';
+
+                    let totalWorkingHours = 'No working hours';
+                    if (record.punchIn) {
+                        if (record.punchOut) {
+                            const duration = moment.duration(moment(record.punchOut).diff(moment(record.punchIn)));
+                            const totalHours = Math.floor(duration.asHours());
+                            const totalMinutes = duration.minutes();
+                            const totalSeconds = duration.seconds();
+                            totalWorkingHours = `${totalHours}h ${totalMinutes}m ${totalSeconds}s`;
+                        } else {
+                            totalWorkingHours = 'Shift not marked end';
+                        }
+                    }
 
                     if (status === 'Present') totalPresent++;
                     else totalAbsent++;
 
-                    if (regularized === 'Yes') totalRegularized++;
+                    if (regularized === 'Yes') {
+                        totalRegularized++;
+                        console.log(`📧 Regularized attendance for ${formattedDate} approved by ${approvedBy}, User Email: ${user?.email || 'N/A'}`);
+                    }
 
-                    console.log(`📅 Date: ${formattedDate} | Status: ${status} | Working Hours: ${workingHours} | Regularized: ${regularized} | Approved By: ${approvedBy}`);
+                    const base64Image = record.image ? `data:image/jpeg;base64,${record.image}` : null;
+
+                    console.log(`📅 Date: ${formattedDate} | Status: ${status} | Punch In: ${record.punchIn ? moment(record.punchIn).format('hh:mm:ss A') : 'N/A'} | Punch Out: ${record.punchOut ? moment(record.punchOut).format('hh:mm:ss A') : 'N/A'} | Total Working Hours: ${totalWorkingHours} | Regularized: ${regularized} | Approved By: ${approvedBy}`);
 
                     return {
                         serialNo: serialCounter++,
-                        image: record.image || 'N/A',
+                        image: base64Image,
                         date: formattedDate,
-                        punchIn: record.punchIn ? moment(record.punchIn).format('hh:mm A') : 'N/A',
-                        punchOut: record.punchOut ? moment(record.punchOut).format('hh:mm A') : 'N/A',
-                        workingHours,
+                        punchIn: record.punchIn ? moment(record.punchIn).format('hh:mm:ss A') : 'N/A',
+                        punchOut: record.punchOut ? moment(record.punchOut).format('hh:mm:ss A') : 'N/A',
+                        totalWorkingHours,
                         status,
                         attendanceRegularized: regularized,
-                        attendanceRegularizedApprovedBy: approvedBy
+                        approvedBy: approvedBy
                     };
                 });
+
+                try {
+                    const leaveRequests = await leaveService.getLeaveRequests(user._id, req.user?.role);
+                    totalLeaves = leaveRequests.length;
+                } catch (err) {
+                    console.error(`Error fetching leave requests for user ${user._id}:`, err);
+                }
+    
+                totalPaidDays = totalPresent + totalLeaves;    
 
                 return {
                     serialNo: serialCounter++,
                     name: user?.name || 'Unknown',
                     email: user?.email || 'N/A',
+                    phone: user?.phone || 'N/A',
+                    dateOfBirth: user?.dateOfBirth ? moment(user.dateOfBirth).format('DD-MM-YYYY') : 'Not provided',
+                    fatherName: user?.fatherName || 'Not provided',
+                    position: user?.position || 'Not provided',
                     employeeId: user?.employeeId || 'N/A',
+                    managerName: user?.managerName || 'Not provided',
+                    managerRole: user?.managerRole || 'Not provided',
+                    workLocation: user?.workLocation || 'Not provided',
+                    plazaName: user?.plazaName || 'Not provided',
                     attendanceRecords: attendanceData,
+                    summary: {
+                        totalDays,
+                        totalPresent,
+                        totalLeaves,
+                        totalPaidDays,
+                    },
                 };
             })
         );
@@ -2450,13 +2493,951 @@ exports.generateAttendanceReportByPlaza = async (startDate, endDate, plazaName, 
             return res.end(pdfBuffer);
         } else if (normalizedDeliveryMethod === 'email') {
             if (!recipientEmail) {
+                recipientEmail = req.user?.email;
+            }
+            if (!recipientEmail) {
                 console.error('❌ Recipient email is missing for email delivery.');
                 return res.status(400).json({ message: 'Recipient email is required for emailing the report.' });
             }
             await sendEmailWithAttachment(recipientEmail, { buffer: pdfBuffer }, {
-                subject: 'Attendance Report',
+                subject: 'Attendance History Report By Plaza Name',
                 name: req.user?.name || 'User',
-                message: 'Your attendance report is attached.'
+                message: 'Your attendance report is attached.',
+                fileType: 'pdf'
+            });
+            console.log('📨 Email sent successfully!');
+            return res.status(200).json({ message: 'Attendance report emailed successfully.' });
+        }
+    } catch (error) {
+        console.error('❌ Error generating attendance report:', error);
+        return res.status(500).json({ message: 'Failed to generate the report.' });
+    }
+};
+
+exports.generatePlazaAttendanceHistoryExcel = async (req, res) => {
+    try {
+        const { startDate, endDate, plazaName, deliveryMethod, recipientEmail } = req.query;
+
+        console.log(`\n🔹 [START] Generating Plaza Attendance Excel Report`);
+        console.log(`📅 Start Date: ${startDate}, End Date: ${endDate}`);
+        console.log(`🏢 Plaza Name: "${plazaName}"`);
+        console.log(`📤 Delivery Method: ${deliveryMethod}`);
+        console.log(`📧 Recipient Email: ${recipientEmail || 'N/A'}`);
+
+        if (!startDate || !endDate || !plazaName) {
+            console.error('❌ Missing required parameters: Start date, end date, or plaza name.');
+            return res.status(400).json({ message: 'Start date, end date, and plaza name are required.' });
+        }
+
+        const attendanceRecords = await Attendance.find({
+            plazaName: { $regex: new RegExp(`^${plazaName.trim()}$`, 'i') },
+            date: { $gte: startDate, $lte: endDate }
+        }).sort({ userId: 1 });
+
+        if (!attendanceRecords.length) {
+            console.warn(`⚠️ No attendance records found for the specified plaza: "${plazaName}"`);
+            return res.status(404).json({ message: 'No attendance records found for the specified plaza.' });
+        }
+
+        const userIds = [...new Set(attendanceRecords.map(record => record.userId))];
+        const users = await User.find({ _id: { $in: userIds } }).sort({ _id: 1 });
+
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = 'VRSIIS HRM';
+        workbook.created = new Date();
+
+        for (const user of users) {
+            console.log(`Processing user: ${user.name}`);
+
+            const userAttendance = attendanceRecords.filter(record => record.userId.toString() === user._id.toString());
+            if (!userAttendance.length) continue;
+
+            let totalPresent = 0, totalLeaves = 0, totalPaidDays = 0;
+
+            const worksheet = workbook.addWorksheet(user.name || 'Plaza Attendance');
+            const title = 'Plaza Attendance History';
+            const titleRow = worksheet.addRow([title]);
+            console.log(`📄 Worksheet Title: ${title}`);
+
+            worksheet.mergeCells(`A${titleRow.number}:I${titleRow.number}`);
+            titleRow.font = { bold: true, color: { argb: 'FFFFFF' }, size: 16 };
+            titleRow.alignment = { horizontal: 'center' };
+            titleRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '25325F' } };
+
+            worksheet.addRow([]);
+
+            const columnHeaders = [
+                'S.No',
+                'Date',
+                'Image',
+                'Punch In',
+                'Punch Out',
+                'Total Working Hours',
+                'Status',
+                'Regularized',
+                'Approved By'
+            ];
+
+            worksheet.addRow(columnHeaders).eachCell(cell => {
+                cell.font = { bold: true, color: { argb: 'FFFFFF' } };
+                cell.alignment = { horizontal: 'center' };
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '25325F' } };
+            });
+
+            worksheet.columns = [
+                { key: 'serialNo', width: 10 },
+                { key: 'date', width: 15 },
+                { key: 'image', width: 20 },
+                { key: 'punchIn', width: 15 },
+                { key: 'punchOut', width: 15 },
+                { key: 'totalWorkingHours', width: 20 },
+                { key: 'status', width: 15 },
+                { key: 'attendanceRegularized', width: 15 },
+                { key: 'approvedBy', width: 20 },
+            ];
+
+            for (const [index, record] of userAttendance.entries()) {
+                let status = 'Absent';
+                let totalWorkingHours = 'N/A';
+                const punchIn = record.punchIn ? moment(record.punchIn) : null;
+                const punchOut = record.punchOut ? moment(record.punchOut) : null;
+
+                if (punchIn) {
+                    if (punchOut) {
+                        const duration = moment.duration(punchOut.diff(punchIn));
+                        const hours = Math.floor(duration.asHours());
+                        const minutes = duration.minutes();
+                        const seconds = duration.seconds();
+                        totalWorkingHours = `${hours}h ${minutes}m ${seconds}s`;
+                
+                        // ✅ Mark Present even if hours, minutes, or seconds > 0
+                        if (hours > 0 || minutes > 0 || seconds > 0) status = 'Present';
+                        else status = 'Absent';
+                    } else {
+                        // ✅ Punch in time available but punch out is N/A, mark Present
+                        totalWorkingHours = 'N/A';
+                        status = 'Present';
+                    }
+                } else {
+                    status = 'Absent';
+                }
+                
+
+                if (status === 'Present') totalPresent++;
+
+                const row = worksheet.addRow({
+                    serialNo: index + 1,
+                    date: moment(record.date).format('DD-MM-YYYY'),
+                    image: record.image,
+                    punchIn: punchIn ? punchIn.format('hh:mm A') : 'N/A',
+                    punchOut: punchOut ? punchOut.format('hh:mm A') : 'N/A',
+                    totalWorkingHours,
+                    status,
+                    attendanceRegularized: record.attendanceRegularized ? 'Yes' : 'No',
+                    approvedBy: record.approvedBy || 'N/A',
+                });
+
+                const currentRowIndex = row.number;
+
+                if (record.imageBase64) {
+                    console.log(`🖼️ Image found for user: ${user.name}, Record Date: ${moment(record.date).format('DD-MM-YYYY')}`);
+                    console.log(`📝 Image Base64 Length: ${record.imageBase64.length}`);
+                
+                    try {
+                        let base64Data = record.imageBase64;
+                
+                        // ✅ Add prefix if missing
+                        if (!base64Data.startsWith('data:image/')) {
+                            base64Data = `data:image/jpeg;base64,${base64Data}`;
+                        }
+                
+                        // ✅ Extract base64 without prefix
+                        const base64WithoutPrefix = base64Data.replace(/^data:image\/\w+;base64,/, '');
+                        const imageBuffer = Buffer.from(base64WithoutPrefix, 'base64');
+                        console.log(`✅ Image buffer created. Buffer length: ${imageBuffer.length}`);
+                
+                        // ✅ Dynamic extension handling
+                        const extension = base64Data.includes('image/png') ? 'png' : 'jpeg';
+                
+                        const imageId = workbook.addImage({
+                            buffer: imageBuffer,
+                            extension: extension,
+                        });
+                
+                        if (imageId) {
+                            console.log(`🆔 Image ID generated successfully: ${imageId}`);
+                        } else {
+                            console.warn(`⚠️ Failed to generate image ID for user: ${user.name}`);
+                        }
+                
+                        worksheet.getRow(currentRowIndex).height = 80;
+                        worksheet.getColumn(3).width = 25;
+                        worksheet.addImage(imageId, {
+                            tl: { col: 2, row: currentRowIndex - 1 },
+                            ext: { width: 100, height: 80 },
+                            editAs: 'oneCell',
+                        });
+                
+                        console.log(`✅ Image added successfully for user: ${user.name} at row: ${currentRowIndex}`);
+                    } catch (imgErr) {
+                        console.error(`❌ Error processing image for user: ${user.name}`, imgErr);
+                    }
+                } else {
+                    console.log(`🚫 No image found for user: ${user.name}, Record Date: ${moment(record.date).format('DD-MM-YYYY')}`);
+                }                                       
+            }
+
+            const leaveRequests = await leaveService.getLeaveRequests(user._id, req.user?.role);
+            totalLeaves = leaveRequests.length;
+            totalPaidDays = totalPresent + totalLeaves;
+
+            worksheet.addRow([]);
+            const summaryTitleRow = worksheet.addRow(['Summary']);
+            worksheet.mergeCells(`A${summaryTitleRow.number}:B${summaryTitleRow.number}`);
+            summaryTitleRow.font = { bold: true, color: { argb: 'FFFFFF' }, size: 14 };
+            summaryTitleRow.alignment = { horizontal: 'center' };
+            summaryTitleRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '25325F' } };
+
+            worksheet.addRow(['Total Days', userAttendance.length]);
+            worksheet.addRow(['Total Present', totalPresent]);
+            worksheet.addRow(['Total Leaves', totalLeaves]);
+            worksheet.addRow(['Total Paid Days', totalPaidDays]);
+        }
+
+        const buffer = await workbook.xlsx.writeBuffer();
+        const fileName = `plaza_attendance_report_${moment().format('YYYYMMDDHHmmss')}.xlsx`;
+
+        if (deliveryMethod === 'download') {
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+            res.end(buffer);
+        } else if (deliveryMethod === 'email') {
+            const finalRecipient = recipientEmail || req.user?.email;
+            if (!finalRecipient) {
+                return res.status(400).json({ message: 'Recipient email is required for email delivery method' });
+            }
+            await sendxlsxEmailWithAttachment(finalRecipient, { buffer }, {
+                subject: 'Plaza Attendance Report (Excel)',
+                name: req.user?.name || 'User',
+                message: 'Please find the plaza attendance report attached in Excel format.',
+                fileType: 'xlsx',
+            });
+            return res.status(200).json({ message: 'Plaza attendance report emailed successfully.' });
+        }
+    } catch (error) {
+        console.error('❌ Error generating Plaza Excel report:', error);
+        return res.status(500).json({ message: 'Failed to generate the Plaza Excel report.' });
+    }
+};
+
+exports.generateAllUsersAttendanceSummaryPDF = async (startDate, endDate, req, res, deliveryMethod, recipientEmail) => {
+    try {
+        console.log(`🔹 Start Date: ${startDate}, End Date: ${endDate}`);
+        console.log(`🔹 Delivery Method: ${deliveryMethod}`);
+        console.log(`🔹 Recipient Email: ${recipientEmail || 'N/A'}`);
+
+        const normalizedDeliveryMethod = (deliveryMethod || '').toLowerCase();
+        if (!['download', 'email'].includes(normalizedDeliveryMethod)) {
+            console.error(`❌ Invalid delivery method: ${normalizedDeliveryMethod}`);
+            return res.status(400).json({ message: 'Invalid delivery method.' });
+        }
+
+        console.log('📌 Fetching users...');
+        const users = await User.find({}).lean();
+        console.log(`✅ Total users found: ${users.length}`);
+
+        if (!users.length) {
+            console.warn('⚠️ No users found.');
+            return res.status(404).json({ message: 'No users found' });
+        }
+
+        const templatePath = path.join(__dirname, '..', 'templates', 'AllUsersSummaryReportUI.html');
+        console.log(`📄 Template Path: ${templatePath}`);
+        let templateSource;
+        try {
+            templateSource = fs.readFileSync(templatePath, 'utf-8');
+            console.log('✅ Template loaded successfully.');
+        } catch (templateError) {
+            console.error('❌ Error reading template file:', templateError);
+            throw new Error('Template file not found or inaccessible.');
+        }
+        const template = handlebars.compile(templateSource);
+
+        console.log('🛠 Processing users data for the summary report...');
+        const usersSummaryData = await Promise.all(users.map(async (user) => {
+            const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
+            const regularizations = await AttendanceRegularization.find({
+                user: user._id,
+                startDate: { $lte: endDate },
+                endDate: { $gte: startDate },
+                status: 'Approved'
+            }).lean();
+
+            const totalDays = attendanceRecords.length;
+            const presentDays = attendanceRecords.filter(r => r.present === 'Yes' || r.present === 'Attendance Regularized').length;
+            const absentDays = totalDays - presentDays;
+            const totalWorkingHours = attendanceRecords.reduce((acc, r) => {
+                if (r.totalWorkingHours && r.totalWorkingHours !== 'No working hours' && r.totalWorkingHours !== 'Attendance Regularized') {
+                    const [hours, minutes] = r.totalWorkingHours.split(' ').filter((_, i) => i % 2 === 0);
+                    acc += parseInt(hours) + (parseInt(minutes) / 60 || 0);
+                }
+                return acc;
+            }, 0);
+
+            const averageWorkingHours = presentDays ? (totalWorkingHours / presentDays).toFixed(2) : 0;
+            const compliance = totalDays ? ((presentDays / totalDays) * 100).toFixed(2) : 0;
+            const totalRegularizations = regularizations.length;
+
+            return {
+                name: user.name,
+                fatherName: user.fatherName || 'N/A',
+                email: user.email,
+                employeeId: user.employeeId || 'N/A',
+                plazaName: user.plazaName || 'N/A',
+                totalDays,
+                presentDays,
+                totalLeaves: totalDays - presentDays - absentDays,
+                totalPaidDays: presentDays + totalRegularizations,
+                absentDays,
+                totalWorkingHours: totalWorkingHours.toFixed(2),
+                averageWorkingHours,
+                regularizations: totalRegularizations,
+                compliance
+            };
+        }));
+
+        console.log('✅ User summary data processed.');
+        const reportData = {
+            startDate: moment(startDate).format('MMMM Do, YYYY'),
+            endDate: moment(endDate).format('MMMM Do, YYYY'),
+            users: usersSummaryData
+        };
+
+        const htmlContent = template(reportData);
+        console.log('✅ HTML content generated.');
+
+        const browser = await puppeteer.launch();
+        const page = await browser.newPage();
+        await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
+
+        console.log('📄 Generating PDF...');
+        const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
+        await browser.close();
+
+        if (deliveryMethod === 'download') {
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader(
+                'Content-Disposition',
+                `attachment; filename=all_users_summary_report_${moment().format('YYYYMMDDHHmmss')}.pdf`
+            );
+            return res.end(pdfBuffer);
+        } else if (deliveryMethod === 'email') {
+            if (!recipientEmail) {
+                recipientEmail = req.user?.email;
+            }
+
+            if (!recipientEmail) {
+                return res.status(400).json({ message: 'Recipient email is required for emailing the report.' });
+            }
+
+            const subject = 'All Users Attendance Summary Report';
+            const name = req.user?.name || 'User';
+            const message = 'Please find attached the attendance summary report for all users.';
+
+            await sendEmailWithAttachment(recipientEmail, { buffer: pdfBuffer }, { subject, name, message, fileType: 'pdf' });
+            console.log('✅ Email sent successfully.');
+            return res.status(200).json({ message: 'Attendance summary report emailed successfully.' });
+        }
+    } catch (error) {
+        console.error('❌ Error generating attendance summary PDF:', error);
+        res.status(500).json({ message: 'Failed to generate the attendance summary report.' });
+    }
+};
+
+exports.generateAllUsersAttendanceSummaryExcel = async (startDate, endDate, req, res, deliveryMethod, recipientEmail) => {
+    try {
+        console.log(`🔹 Start Date: ${startDate}, End Date: ${endDate}`);
+        console.log(`🔹 Delivery Method: ${deliveryMethod}`);
+        console.log(`🔹 Recipient Email: ${recipientEmail || 'N/A'}`);
+
+        const normalizedDeliveryMethod = (deliveryMethod || '').toLowerCase();
+        if (!['download', 'email'].includes(normalizedDeliveryMethod)) {
+            console.error(`❌ Invalid delivery method: ${normalizedDeliveryMethod}`);
+            return res.status(400).json({ message: 'Invalid delivery method.' });
+        }
+
+        console.log('📌 Fetching users...');
+        const users = await User.find({}).lean();
+        console.log(`✅ Total users found: ${users.length}`);
+
+        if (!users.length) {
+            console.warn('⚠️ No users found.');
+            return res.status(404).json({ message: 'No users found' });
+        }
+
+        console.log('🛠 Processing users data for the summary report...');
+        const usersSummaryData = await Promise.all(users.map(async (user) => {
+            const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
+            const regularizations = await AttendanceRegularization.find({
+                user: user._id,
+                startDate: { $lte: endDate },
+                endDate: { $gte: startDate },
+                status: 'Approved'
+            }).lean();
+
+            const totalDays = attendanceRecords.length;
+            const presentDays = attendanceRecords.filter(r => r.present === 'Yes' || r.present === 'Attendance Regularized').length;
+            const absentDays = totalDays - presentDays;
+            const totalWorkingHours = attendanceRecords.reduce((acc, r) => {
+                if (r.totalWorkingHours && r.totalWorkingHours !== 'No working hours' && r.totalWorkingHours !== 'Attendance Regularized') {
+                    const [hours, minutes] = r.totalWorkingHours.split(' ').filter((_, i) => i % 2 === 0);
+                    acc += parseInt(hours) + (parseInt(minutes) / 60 || 0);
+                }
+                return acc;
+            }, 0);
+
+            const averageWorkingHours = presentDays ? (totalWorkingHours / presentDays).toFixed(2) : 0;
+            const compliance = totalDays ? ((presentDays / totalDays) * 100).toFixed(2) : 0;
+            const totalRegularizations = regularizations.length;
+
+            return {
+                name: user.name,
+                fatherName: user.fatherName || 'N/A',
+                email: user.email,
+                employeeId: user.employeeId || 'N/A',
+                plazaName: user.plazaName || 'N/A',
+                totalDays,
+                presentDays,
+                totalLeaves: totalDays - presentDays - absentDays,
+                totalPaidDays: presentDays + totalRegularizations,
+                absentDays,
+                totalWorkingHours: totalWorkingHours.toFixed(2),
+                averageWorkingHours,
+                regularizations: totalRegularizations,
+                compliance
+            };
+        }));
+
+        console.log('✅ User summary data processed.');
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Attendance Summary');
+
+        worksheet.columns = [
+            { header: 'NAME', key: 'name' },
+            { header: 'FATHER NAME', key: 'fatherName' },
+            { header: 'EMAIL', key: 'email' },
+            { header: 'EMP CODE', key: 'employeeId' },
+            { header: 'PLAZA NAME', key: 'plazaName' },
+            { header: 'TOTAL DAYS', key: 'totalDays' },
+            { header: 'TOTAL PRESENT DAYS', key: 'presentDays' },
+            { header: 'TOTAL LEAVE', key: 'totalLeaves' },
+            { header: 'TOTAL PAID DAYS', key: 'totalPaidDays' },
+            { header: 'ABSENT DAYS', key: 'absentDays' },
+            { header: 'TOTAL WORKING HOURS', key: 'totalWorkingHours' },
+            { header: 'AVERAGE WORKING HOURS/DAY', key: 'averageWorkingHours' },
+            { header: 'REGULARIZATIONS', key: 'regularizations' },
+            { header: 'ATTENDANCE COMPLIANCE (%)', key: 'compliance' }
+        ];
+
+        worksheet.getRow(1).eachCell(cell => {
+            cell.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: '25325F' }
+            };
+            cell.font = { color: { argb: 'F7A832' }, bold: true };
+        });
+
+        usersSummaryData.forEach(user => worksheet.addRow(user));
+
+        const buffer = await workbook.xlsx.writeBuffer();
+        console.log('✅ Excel file generated.');
+
+        if (deliveryMethod === 'download') {
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            res.setHeader('Content-Disposition', `attachment; filename=all_users_summary_report_${moment().format('YYYYMMDDHHmmss')}.xlsx`);
+            return res.end(buffer);
+        } else if (deliveryMethod === 'email') {
+            if (!recipientEmail) {
+                recipientEmail = req.user?.email;
+            }
+
+            if (!recipientEmail) {
+                return res.status(400).json({ message: 'Recipient email is required for emailing the report.' });
+            }
+
+            const subject = 'All Users Attendance Summary Report (Excel)';
+            const name = req.user?.name || 'User';
+            const message = 'Please find attached the Excel attendance summary report for all users.';
+
+            await sendEmailWithAttachment(recipientEmail, { buffer }, { subject, name, message, fileType: 'xlsx' });
+            console.log('✅ Email sent successfully.');
+            return res.status(200).json({ message: 'Attendance summary Excel report emailed successfully.' });
+        }
+    } catch (error) {
+        console.error('❌ Error generating attendance summary Excel:', error);
+        res.status(500).json({ message: 'Failed to generate the attendance summary Excel report.' });
+    }
+};
+
+exports.generateUserTagsAttendanceSummaryPDF = async (req, res, userTags) => {
+    try {
+        const { startDate, endDate, deliveryMethod } = req.query;
+        let { recipientEmail } = req.query;
+
+        if (!startDate || !endDate) {
+            return res.status(400).json({ message: 'Start date and end date are required' });
+        }
+
+        if (!deliveryMethod || !['download', 'email'].includes(deliveryMethod)) {
+            return res.status(400).json({ message: 'Valid deliveryMethod (download or email) is required' });
+        }
+
+        console.log('📌 Fetching users by tags...');
+        const users = await User.find({
+            UserTags: { $in: userTags.map(tag => tag.trim()) }
+        }).lean();
+
+        console.log(`✅ Total users found: ${users.length}`);
+        if (!users.length) {
+            return res.status(404).json({ message: 'No users found for the given tags' });
+        }
+
+        console.log('🛠 Processing users data for the summary report...');
+        const usersSummaryData = await Promise.all(users.map(async (user) => {
+            const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate) || [];
+            const regularizations = await AttendanceRegularization.find({
+                user: user._id,
+                startDate: { $lte: endDate },
+                endDate: { $gte: startDate },
+                status: 'Approved'
+            }).lean();
+
+            const totalDays = attendanceRecords.length || 0;
+            const presentDays = attendanceRecords.filter(r => r.present === 'Yes' || r.present === 'Attendance Regularized').length || 0;
+            const absentDays = totalDays - presentDays;
+            const totalRegularizations = regularizations.length || 0;
+
+            const totalWorkingHours = attendanceRecords.reduce((acc, r) => {
+                if (r.totalWorkingHours && r.totalWorkingHours !== 'No working hours' && r.totalWorkingHours !== 'Attendance Regularized') {
+                    const [hours, minutes] = r.totalWorkingHours.split(' ').filter((_, i) => i % 2 === 0);
+                    acc += (parseInt(hours) || 0) + ((parseInt(minutes) || 0) / 60);
+                }
+                return acc;
+            }, 0);
+
+            const averageWorkingHours = presentDays ? (totalWorkingHours / presentDays).toFixed(2) : "NaN";
+            const compliance = totalDays ? ((presentDays / totalDays) * 100).toFixed(2) : "NaN";
+
+            return {
+                name: user.name || "NaN",
+                fatherName: user.fatherName || "NaN",
+                email: user.email || "NaN",
+                employeeId: user.employeeId || "NaN",
+                totalDays: totalDays || "NaN",
+                presentDays: presentDays || "NaN",
+                totalLeaves: totalDays - presentDays - absentDays || "NaN",
+                totalPaidDays: presentDays + totalRegularizations || "NaN",
+                absentDays: absentDays || "NaN",
+                totalWorkingHours: totalWorkingHours ? totalWorkingHours.toFixed(2) : "NaN",
+                averageWorkingHours,
+                regularizations: totalRegularizations || "NaN",
+                compliance
+            };
+        }));
+
+        console.log('✅ User summary data processed.');
+        const templatePath = path.join(__dirname, '..', 'templates', 'UserTagsSummaryReportUI.html');
+        const templateSource = fs.readFileSync(templatePath, 'utf-8');
+        const template = handlebars.compile(templateSource);
+
+        const htmlContent = template({
+            startDate: moment(startDate).format('MMMM Do, YYYY'),
+            endDate: moment(endDate).format('MMMM Do, YYYY'),
+            userTags: userTags.join(', '),
+            users: usersSummaryData
+        });
+
+        console.log('📄 Generating PDF...');
+        const browser = await puppeteer.launch();
+        const page = await browser.newPage();
+        await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
+        const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
+        await browser.close();
+
+        if (deliveryMethod === 'download') {
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename=user_tags_summary_report_${moment().format('YYYYMMDDHHmmss')}.pdf`);
+            return res.end(pdfBuffer);
+        } else if (deliveryMethod === 'email') {
+            if (!recipientEmail) {
+                recipientEmail = req.user?.email;
+            }
+
+            if (!recipientEmail) {
+                return res.status(400).json({ message: 'Recipient email is required for emailing the report.' });
+            }
+
+            await sendEmailWithAttachment(recipientEmail, { buffer: pdfBuffer }, {
+                subject: 'User Tags Attendance Summary Report',
+                name: req.user?.name || 'User',
+                message: 'Please find attached the attendance summary report for selected user tags.',
+                fileType: 'pdf',
+            });
+            console.log('✅ Email sent successfully.');
+            return res.status(200).json({ message: 'Attendance summary report emailed successfully.' });
+        }
+    } catch (error) {
+        console.error('❌ Error generating attendance summary PDF:', error);
+        res.status(500).json({ message: 'Failed to generate the attendance summary report.' });
+    }
+};
+
+exports.generateUserTagsAttendanceSummaryExcel = async (req, res, userTags) => {
+    try {
+        const { startDate, endDate, deliveryMethod } = req.query;
+        let { recipientEmail } = req.query;
+
+        if (!startDate || !endDate) {
+            return res.status(400).json({ message: 'Start date and end date are required' });
+        }
+
+        if (!deliveryMethod || !['download', 'email'].includes(deliveryMethod)) {
+            return res.status(400).json({ message: 'Valid deliveryMethod (download or email) is required' });
+        }
+
+        console.log('📌 Fetching users by tags...');
+        const users = await User.find({
+            UserTags: { $in: userTags.map(tag => tag.trim()) }
+        }).lean();
+
+        console.log(`✅ Total users found: ${users.length}`);
+        if (!users.length) {
+            return res.status(404).json({ message: 'No users found for the given tags' });
+        }
+
+        console.log('🛠 Processing users data for the summary report...');
+        const usersSummaryData = await Promise.all(users.map(async (user) => {
+            const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate) || [];
+            const regularizations = await AttendanceRegularization.find({
+                user: user._id,
+                startDate: { $lte: endDate },
+                endDate: { $gte: startDate },
+                status: 'Approved'
+            }).lean();
+
+            const totalDays = attendanceRecords.length || 0;
+            const presentDays = attendanceRecords.filter(r => r.present === 'Yes' || r.present === 'Attendance Regularized').length || 0;
+            const absentDays = totalDays - presentDays;
+            const totalRegularizations = regularizations.length || 0;
+
+            const totalWorkingHours = attendanceRecords.reduce((acc, r) => {
+                if (r.totalWorkingHours && r.totalWorkingHours !== 'No working hours' && r.totalWorkingHours !== 'Attendance Regularized') {
+                    const [hours, minutes] = r.totalWorkingHours.split(' ').filter((_, i) => i % 2 === 0);
+                    acc += (parseInt(hours) || 0) + ((parseInt(minutes) || 0) / 60);
+                }
+                return acc;
+            }, 0);
+
+            const averageWorkingHours = presentDays ? (totalWorkingHours / presentDays).toFixed(2) : "NaN";
+            const compliance = totalDays ? ((presentDays / totalDays) * 100).toFixed(2) : "NaN";
+
+            return {
+                name: user.name || "NaN",
+                fatherName: user.fatherName || "NaN",
+                email: user.email || "NaN",
+                employeeId: user.employeeId || "NaN",
+                totalDays: totalDays || "NaN",
+                presentDays: presentDays || "NaN",
+                totalLeaves: totalDays - presentDays - absentDays || "NaN",
+                totalPaidDays: presentDays + totalRegularizations || "NaN",
+                absentDays: absentDays || "NaN",
+                totalWorkingHours: totalWorkingHours ? totalWorkingHours.toFixed(2) : "NaN",
+                averageWorkingHours,
+                regularizations: totalRegularizations || "NaN",
+                compliance
+            };
+        }));
+
+        console.log('📄 Generating Excel file...');
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Attendance Summary');
+        
+        worksheet.columns = [
+            { header: 'Name', key: 'name', width: 20 },
+            { header: 'Father Name', key: 'fatherName', width: 20 },
+            { header: 'Email', key: 'email', width: 25 },
+            { header: 'Employee ID', key: 'employeeId', width: 15 },
+            { header: 'Total Days', key: 'totalDays', width: 10 },
+            { header: 'Present Days', key: 'presentDays', width: 12 },
+            { header: 'Total Leaves', key: 'totalLeaves', width: 12 },
+            { header: 'Total Paid Days', key: 'totalPaidDays', width: 12 },
+            { header: 'Absent Days', key: 'absentDays', width: 12 },
+            { header: 'Total Working Hours', key: 'totalWorkingHours', width: 18 },
+            { header: 'Average Working Hours', key: 'averageWorkingHours', width: 20 },
+            { header: 'Regularizations', key: 'regularizations', width: 15 },
+            { header: 'Compliance (%)', key: 'compliance', width: 15 }
+        ];
+
+        worksheet.getRow(1).eachCell(cell => {
+            cell.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: '25325F' }
+            };
+            cell.font = { color: { argb: 'F7A832' }, bold: true };
+        });
+
+        worksheet.addRows(usersSummaryData);
+
+        const buffer = await workbook.xlsx.writeBuffer();
+        
+        if (deliveryMethod === 'download') {
+            res.setHeader('Content-Disposition', `attachment; filename=user_tags_summary_${moment().format('YYYYMMDDHHmmss')}.xlsx`);
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            return res.end(buffer);
+        } else if (deliveryMethod === 'email') {
+            if (!recipientEmail) {
+                recipientEmail = req.user?.email;
+            }
+
+            if (!recipientEmail) {
+                return res.status(400).json({ message: 'Recipient email is required for emailing the report.' });
+            }
+
+            await sendEmailWithAttachment(recipientEmail, { buffer }, {
+                subject: 'User Tags Attendance Summary Report',
+                name: req.user?.name || 'User',
+                message: 'Please find attached the attendance summary report for selected user tags.',
+                fileType: 'xlsx',
+            });
+            console.log('✅ Email sent successfully.');
+            return res.status(200).json({ message: 'Attendance summary report emailed successfully.' });
+        }
+    } catch (error) {
+        console.error('❌ Error generating attendance summary Excel:', error);
+        res.status(500).json({ message: 'Failed to generate the attendance summary report.' });
+    }
+};
+
+exports.generateAttendanceReportSummaryByPlaza = async (startDate, endDate, plazaName, req, res, deliveryMethod, recipientEmail) => {
+    try {
+        console.log(`\n🔹 [START] Generating Attendance Report`);
+        console.log(`📅 Start Date: ${startDate}, End Date: ${endDate}`);
+        console.log(`🏢 Plaza Name: "${plazaName}"`);
+        console.log(`📤 Delivery Method: ${deliveryMethod}`);
+        console.log(`📧 Recipient Email: ${recipientEmail || 'N/A'}`);
+
+        if (!startDate || !endDate || !plazaName) {
+            console.error('❌ Missing required parameters: Start date, end date, or plaza name.');
+            return res.status(400).json({ message: 'Start date, end date, and plaza name are required.' });
+        }
+
+        const normalizedDeliveryMethod = (deliveryMethod || '').toLowerCase();
+        if (!['download', 'email'].includes(normalizedDeliveryMethod)) {
+            console.error('❌ Invalid delivery method:', deliveryMethod);
+            return res.status(400).json({ message: 'Invalid delivery method. Use "download" or "email".' });
+        }
+
+        console.log(`📌 Fetching attendance records for plaza: "${plazaName}"...`);
+        const attendanceRecords = await Attendance.find({
+            plazaName: { $regex: new RegExp(`^${plazaName.trim()}$`, 'i') },
+            date: { $gte: startDate, $lte: endDate }
+        }).sort({ userId: 1 });
+
+        if (attendanceRecords.length === 0) {
+            console.warn(`⚠️ No attendance records found for the specified plaza: "${plazaName}"`);
+            return res.status(404).json({ message: 'No attendance records found for the specified plaza.' });
+        }
+
+        const userIds = [...new Set(attendanceRecords.map(record => record.userId))];
+        const users = await User.find({ _id: { $in: userIds } }).sort({ _id: 1 });
+
+        const usersSummaryData = await Promise.all(users.map(async (user) => {
+            const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
+            const regularizations = await AttendanceRegularization.find({
+                user: user._id,
+                startDate: { $lte: endDate },
+                endDate: { $gte: startDate },
+                status: 'Approved'
+            }).lean();
+
+            const totalDays = attendanceRecords.length;
+            const presentDays = attendanceRecords.filter(r => r.present === 'Yes' || r.present === 'Attendance Regularized').length;
+            const absentDays = totalDays - presentDays;
+            const totalWorkingHours = attendanceRecords.reduce((acc, r) => {
+                if (r.totalWorkingHours && r.totalWorkingHours !== 'No working hours' && r.totalWorkingHours !== 'Attendance Regularized') {
+                    const [hours, minutes] = r.totalWorkingHours.split(' ').filter((_, i) => i % 2 === 0);
+                    acc += parseInt(hours) + (parseInt(minutes) / 60 || 0);
+                }
+                return acc;
+            }, 0);
+
+            const averageWorkingHours = presentDays ? (totalWorkingHours / presentDays).toFixed(2) : 0;
+            const compliance = totalDays ? ((presentDays / totalDays) * 100).toFixed(2) : 0;
+            const totalRegularizations = regularizations.length;
+
+            return {
+                name: user.name,
+                fatherName: user.fatherName || 'N/A',
+                email: user.email,
+                employeeId: user.employeeId || 'N/A',
+                plazaName: plazaName.trim(),
+                totalDays,
+                presentDays,
+                totalLeaves: totalDays - presentDays - absentDays,
+                totalPaidDays: presentDays + totalRegularizations,
+                absentDays,
+                totalWorkingHours: totalWorkingHours.toFixed(2),
+                averageWorkingHours,
+                regularizations: totalRegularizations,
+                compliance
+            };
+        }));
+
+        console.log('✅ User summary data processed.');
+        const reportData = {
+            startDate: moment(startDate).format('MMMM Do, YYYY'),
+            endDate: moment(endDate).format('MMMM Do, YYYY'),
+            plazaName: plazaName.trim(),
+            generatedOn: moment().format('MMMM Do, YYYY'),
+            users: usersSummaryData
+        };
+
+        console.log('📌 Compiling HTML report template...');
+        const htmlContent = handlebars.compile(fs.readFileSync('templates/AttendanceReportPlazaUI.html', 'utf-8'))(reportData);
+
+        console.log('🚀 Generating PDF Report...');
+        const browser = await puppeteer.launch();
+        const page = await browser.newPage();
+        await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
+        const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
+        await browser.close();
+        console.log('✅ PDF Report Generated Successfully.');
+
+        if (normalizedDeliveryMethod === 'download') {
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${plazaName.trim()}.pdf`);
+            return res.end(pdfBuffer);
+        } else if (normalizedDeliveryMethod === 'email') {
+            if (!recipientEmail) {
+                recipientEmail = req.user?.email;
+            }
+            if (!recipientEmail) {
+                console.error('❌ Recipient email is missing for email delivery.');
+                return res.status(400).json({ message: 'Recipient email is required for emailing the report.' });
+            }
+            await sendEmailWithAttachment(recipientEmail, { buffer: pdfBuffer }, {
+                subject: 'Attendance History Report Summary By Plaza Name',
+                name: req.user?.name || 'User',
+                message: 'Please find attached the attendance summary report for selected Plaza.',
+                fileType: 'pdf'
+            });
+            console.log('📨 Email sent successfully!');
+            return res.status(200).json({ message: 'Attendance report emailed successfully.' });
+        }
+    } catch (error) {
+        console.error('❌ Error generating attendance report:', error);
+        return res.status(500).json({ message: 'Failed to generate the report.' });
+    }
+};
+
+exports.generateAttendanceReportSummaryByPlazaExcel = async (startDate, endDate, plazaName, req, res, deliveryMethod, recipientEmail) => {
+    try {
+        console.log(`\n🔹 [START] Generating Attendance Report (Excel)`);
+
+        const attendanceRecords = await Attendance.find({
+            plazaName: { $regex: new RegExp(`^${plazaName.trim()}$`, 'i') },
+            date: { $gte: startDate, $lte: endDate }
+        }).sort({ userId: 1 });
+
+        if (attendanceRecords.length === 0) {
+            console.warn(`⚠️ No attendance records found for the specified plaza: "${plazaName}"`);
+            return res.status(404).json({ message: 'No attendance records found for the specified plaza.' });
+        }
+
+        const userIds = [...new Set(attendanceRecords.map(record => record.userId))];
+        const users = await User.find({ _id: { $in: userIds } }).sort({ _id: 1 });
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Attendance Summary');
+
+        worksheet.columns = [
+            { header: 'Name', key: 'name', width: 20 },
+            { header: 'Father Name', key: 'fatherName', width: 20 },
+            { header: 'Email', key: 'email', width: 25 },
+            { header: 'Employee ID', key: 'employeeId', width: 15 },
+            { header: 'Plaza Name', key: 'plazaName', width: 20 },
+            { header: 'Total Days', key: 'totalDays', width: 12 },
+            { header: 'Present Days', key: 'presentDays', width: 15 },
+            { header: 'Total Leaves', key: 'totalLeaves', width: 15 },
+            { header: 'Total Paid Days', key: 'totalPaidDays', width: 15 },
+            { header: 'Absent Days', key: 'absentDays', width: 12 },
+            { header: 'Total Working Hours', key: 'totalWorkingHours', width: 20 },
+            { header: 'Average Working Hours', key: 'averageWorkingHours', width: 22 },
+            { header: 'Regularizations', key: 'regularizations', width: 15 },
+            { header: 'Compliance (%)', key: 'compliance', width: 15 }
+        ];
+
+        worksheet.getRow(1).eachCell(cell => {
+            cell.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: '25325F' }
+            };
+            cell.font = { color: { argb: 'F7A832' }, bold: true };
+        });
+
+        for (const user of users) {
+            const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
+            const totalDays = attendanceRecords.length;
+            const presentDays = attendanceRecords.filter(r => r.present === 'Yes' || r.present === 'Attendance Regularized').length;
+            const absentDays = totalDays - presentDays;
+            const totalWorkingHours = attendanceRecords.reduce((acc, r) => {
+                if (r.totalWorkingHours && r.totalWorkingHours !== 'No working hours' && r.totalWorkingHours !== 'Attendance Regularized') {
+                    const [hours, minutes] = r.totalWorkingHours.split(' ').filter((_, i) => i % 2 === 0);
+                    acc += parseInt(hours) + (parseInt(minutes) / 60 || 0);
+                }
+                return acc;
+            }, 0);
+
+            worksheet.addRow({
+                name: user.name,
+                fatherName: user.fatherName || 'N/A',
+                email: user.email,
+                employeeId: user.employeeId || 'N/A',
+                plazaName: plazaName.trim(),
+                totalDays,
+                presentDays,
+                totalLeaves: totalDays - presentDays - absentDays,
+                totalPaidDays: presentDays,
+                absentDays,
+                totalWorkingHours: totalWorkingHours.toFixed(2),
+                averageWorkingHours: presentDays ? (totalWorkingHours / presentDays).toFixed(2) : 0,
+                regularizations: 0,
+                compliance: totalDays ? ((presentDays / totalDays) * 100).toFixed(2) : 0
+            });
+        }
+
+        const buffer = await workbook.xlsx.writeBuffer();
+        console.log('✅ Excel Report Generated Successfully.');
+
+        if (deliveryMethod === 'download') {
+            res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${plazaName.trim()}.xlsx`);
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            res.setHeader('Content-Length', buffer.length);
+            return res.end(buffer);
+        } else if (deliveryMethod === 'email') {
+            if (!recipientEmail) recipientEmail = req.user?.email;
+            if (!recipientEmail) {
+                console.error('❌ Recipient email is missing for email delivery.');
+                return res.status(400).json({ message: 'Recipient email is required for emailing the report.' });
+            }
+            await sendEmailWithAttachment(recipientEmail, { buffer }, {
+                subject: 'Attendance History Report Summary By Plaza Name (Excel)',
+                name: req.user?.name || 'User',
+                message: 'Please find attached the attendance summary report for selected Plaza (Excel).',
+                fileType: 'xlsx'
             });
             console.log('📨 Email sent successfully!');
             return res.status(200).json({ message: 'Attendance report emailed successfully.' });

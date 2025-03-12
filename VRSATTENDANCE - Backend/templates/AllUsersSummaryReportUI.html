@@ -1,0 +1,126 @@
+<!-- AllUsersSummaryReportUI.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>All Users Attendance Summary Report</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            margin: 10px;
+            background-color: #f5f5f5;
+            color: #25325F;
+        }
+        .header {
+            background-color: #25325F;
+            color: white;
+            padding: 16px;
+            text-align: center;
+            border-radius: 12px;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .date-range {
+            text-align: center;
+            margin-top: 0px;
+            margin-bottom: 0px;
+            padding: 4px 0;
+            color: #F7A832;
+            font-weight: bold;
+            font-size: 16px;
+        }
+        .table-container {
+            margin-top: 0px;
+            overflow-x: auto;
+            border-radius: 12px;
+            background-color: white;
+            box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.1);
+            page-break-inside: avoid;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        th, td {
+            padding: 10px 12px;
+            text-align: center;
+            border-bottom: 1px solid #e0e0e0;
+            word-break: break-word;
+        }
+        th {
+            background-color: #25325F;
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        tr:hover {
+            background-color: #f1f1f1;
+        }
+        @media print {
+            body {
+                margin: 0;
+            }
+            .table-container {
+                page-break-after: always;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>All Users Attendance Summary Report</h1>
+    </div>
+    <div class="date-range">
+        <p>{{startDate}} - {{endDate}}</p>
+    </div>
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Father Name</th>
+                    <th>Email</th>
+                    <th>Employee Code</th>
+                    <th>Plaza Name</th>
+                    <th>Total Days</th>
+                    <th>Total Present Days</th>
+                    <th>Total Leave</th>
+                    <th>Total Paid Days</th>
+                    <th>Absent Days</th>
+                    <th>Total Working Hours</th>
+                    <th>Average Working Hours/Day</th>
+                    <th>Regularizations</th>
+                    <th>Attendance Compliance (%)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{#each users}}
+                <tr>
+                    <td>{{name}}</td>
+                    <td>{{fatherName}}</td>
+                    <td>{{email}}</td>
+                    <td>{{employeeId}}</td>
+                    <td>{{plazaName}}</td>
+                    <td>{{totalDays}}</td>
+                    <td>{{presentDays}}</td>
+                    <td>{{totalLeaves}}</td>
+                    <td>{{totalPaidDays}}</td>
+                    <td>{{absentDays}}</td>
+                    <td>{{totalWorkingHours}}</td>
+                    <td>{{averageWorkingHours}}</td>
+                    <td>{{regularizations}}</td>
+                    <td>{{compliance}}</td>
+                </tr>
+                {{/each}}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>

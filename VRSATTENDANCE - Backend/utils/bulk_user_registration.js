@@ -4,13 +4,13 @@ const path = require('path');
 const xlsx = require('xlsx');
 const axios = require('axios');
 
-const API_BASE_URL = 'https://518dhcgx-2000.inc1.devtunnels.ms/api/v1'; // Adjust if needed
+const API_BASE_URL = 'https://atms.vrsiis.com:8182/api/v1'; // Adjust if needed
 const LOGIN_URL = `${API_BASE_URL}/auth/token`;
 const REGISTER_URL = `${API_BASE_URL}/auth/register`;
 
 const ADMIN_CREDENTIALS = {
-    email: 'ashish@vrsiis.com', // Replace with actual admin email
-    password: 'Ashish123' // Replace with actual admin password
+    email: 'hr@vrsiis.com', // Replace with actual admin email
+    password: 'Human@123' // Replace with actual admin password
 };
 
 // Arrays to store success and failed registrations

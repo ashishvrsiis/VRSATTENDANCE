@@ -150,3 +150,30 @@ exports.assignUserProjectTag = async (userId, projectTag) => {
         throw new Error(error.message);
     }
 };
+
+exports.updateEmployeeDetails = async (adminUser, employeeId, updateData) => {
+    // Fetch the employee record
+    const employee = await User.findById(employeeId);
+    if (!employee) {
+        const error = new Error('Employee not found');
+        error.statusCode = 404;
+        throw error;
+    }
+
+    // Check if admin is allowed to update this employee
+    if (adminUser.role === 1 && (employee.role === 2 || employee.role === 3)) {
+        // Admin role 1 can update roles 2 and 3
+    } else if (adminUser.role === 2 && employee.role === 3) {
+        // Admin role 2 can update role 3
+    } else {
+        const error = new Error('Unauthorized to update this employee');
+        error.statusCode = 403;
+        throw error;
+    }
+
+    // Perform the update
+    Object.assign(employee, updateData);
+    await employee.save();
+
+    return employee;
+};

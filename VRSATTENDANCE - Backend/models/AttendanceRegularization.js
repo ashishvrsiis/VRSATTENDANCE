@@ -7,7 +7,7 @@ const AttendanceSchema = new mongoose.Schema({
   endDate: { type: Date, required: true },
   remarks: { type: String },
   leaveType: { type: String, required: true },
-  status: { type: String, enum: ['Submitted', 'Approved', 'Rejected'], default: 'Submitted' },
+  status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' },
   reason: { type: String }, // Optional reason
   approvedBy: { type: String },
   updatedAt: { type: Date, default: Date.now },

@@ -274,3 +274,17 @@ exports.assignUserProjectTag = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+exports.updateEmployee = async (req, res) => {
+    try {
+        const adminUser = req.user; // Extract admin details from token
+        const employeeId = req.params.id;
+        const updateData = req.body;
+
+        const updatedEmployee = await userService.updateEmployeeDetails(adminUser, employeeId, updateData);
+
+        res.status(200).json({ message: 'Employee details updated successfully', employee: updatedEmployee });
+    } catch (error) {
+        res.status(error.statusCode || 500).json({ message: error.message });
+    }
+};
