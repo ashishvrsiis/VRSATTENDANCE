@@ -194,6 +194,25 @@ exports.markAttendance = async (req, res) => {
     }
 };
 
+exports.markAttendanceOffline = async (req, res) => {
+    const userId = req.user.userId;
+    const { status, latitude, longitude, image, attendanceTime } = req.body;
+    const today = new Date().toISOString().split('T')[0];
+
+    console.log('Controller - userId:', userId);
+    console.log('Controller - today:', today);
+    console.log('Controller - status:', status);
+    console.log('Controller - data:', { latitude, longitude, image, attendanceTime });
+
+    try {
+        const response = await attendanceService.markAttendanceOffline(userId, today, status, { latitude, longitude, image, attendanceTime });
+        res.json(response);
+    } catch (error) {
+        console.error('Error in markAttendanceOffline:', error.message);
+        res.status(400).json({ error: error.message });
+    }
+};
+
 exports.getAttendanceHistory = async (req, res) => {
     try {
         const userId = req.user.userId;

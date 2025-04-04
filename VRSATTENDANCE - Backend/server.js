@@ -36,6 +36,12 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
+app.use(bodyParser.json({ limit: '50mb' }));
+app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
+
+// app.use(express.json({ limit: '50mb' }));
+// app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
 app.use(cors());
 
 connectDB();
@@ -80,7 +86,7 @@ setupWebSocket(wss);
 // const certificate = fs.readFileSync(certificatePath, 'utf8');
 // const credentials = {key: privatekey, cert: certificate};
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 2000;
 const httpServer = http.createServer(app);
 httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`HTTP Server is running on port ${PORT}`);

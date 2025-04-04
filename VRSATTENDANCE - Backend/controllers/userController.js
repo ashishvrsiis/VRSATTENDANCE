@@ -288,3 +288,20 @@ exports.updateEmployee = async (req, res) => {
         res.status(error.statusCode || 500).json({ message: error.message });
     }
 };
+
+exports.getEmployeesByManager = async (req, res) => {
+    try {
+        const { email, manager } = req.user;
+
+        if (!manager) {
+            return res.status(403).json({ message: 'Only managers can access this resource.' });
+        }
+
+        const employees = await userService.getEmployeesUnderManager(email);
+
+        return res.status(200).json({ employees });
+    } catch (error) {
+        console.error('Error fetching employees under manager:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};

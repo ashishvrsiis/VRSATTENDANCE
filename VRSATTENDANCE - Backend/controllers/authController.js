@@ -201,4 +201,32 @@ const verifyOtp = async (req, res) => {
     }
 };
 
-module.exports = { register, login, approveRegistration, rejectRegistration, getPendingRegistrations, requestOtp, verifyOtp, verifyLoginOtp, toggleOtp};
+const blockUser = async (req, res) => {
+    try {
+        const currentUser = req.user;  // Authenticated user
+        const { targetUserId } = req.body;
+
+        const response = await authService.blockUser(targetUserId, currentUser);
+        res.status(200).json(response);
+    } catch (error) {
+        console.error('Block user error:', error.message);
+        res.status(400).json({ message: error.message });
+    }
+};
+
+const unblockUser = async (req, res) => {
+    try {
+        const currentUser = req.user;  // Authenticated user
+        const { targetUserId } = req.body;
+
+        const response = await authService.unblockUser(targetUserId, currentUser);
+        res.status(200).json(response);
+    } catch (error) {
+        console.error('Unblock user error:', error.message);
+        res.status(400).json({ message: error.message });
+    }
+};
+
+
+
+module.exports = { register, login, approveRegistration, rejectRegistration, getPendingRegistrations, requestOtp, verifyOtp, verifyLoginOtp, toggleOtp, blockUser, unblockUser};

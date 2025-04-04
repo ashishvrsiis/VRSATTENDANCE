@@ -2,9 +2,10 @@ const AttendanceRegularization = require('../models/AttendanceRegularization');
 const User = require('../models/User');
 
 class AttendanceRegularizationService {
-  async getAttendanceList(user) {
+  async getAttendanceList(user, page = 1, limit = 10, status = null) {
     try {
       let filter = {};
+      const skip = (page - 1) * limit;
       console.log('Start of getAttendanceList');
   
       // Log the user details
@@ -36,21 +37,27 @@ class AttendanceRegularizationService {
         }
       }
   
+      if (status) {
+        filter.status = status;
+      }
+      
       console.log('Filter Applied:', JSON.stringify(filter, null, 2));
   
       // Fetch attendance records with detailed population
-      const attendanceRecords = await AttendanceRegularization.find(filter)
-        .populate({
-          path: 'user',
-          select: 'name email managerId',
-          populate: {
-            path: 'managerId',
-            select: 'name email _id',
-          },
-        })
-        .sort({ startDate: -1 });
+      const [totalCount, attendanceRecords] = await Promise.all([
+        AttendanceRegularization.countDocuments(filter),
+        AttendanceRegularization.find(filter)
+          .populate({
+            path: 'user',
+            select: 'name email managerId',
+            populate: { path: 'managerId', select: 'name email _id' }
+          })
+          .sort({ startDate: -1 })
+          .skip(skip)
+          .limit(limit)
+      ]);
   
-      console.log('Fetched Attendance Records:', JSON.stringify(attendanceRecords, null, 2));
+      console.log('Fetched Attendance Records:', JSON.stringify(attendanceRecords, null, 2)); 
   
       // Enhance records with manager details
       const enhancedRecords = attendanceRecords.map(record => {
@@ -70,12 +77,20 @@ class AttendanceRegularizationService {
       });
   
       console.log('Enhanced Records:', JSON.stringify(enhancedRecords, null, 2));
-      return enhancedRecords;
+      return {
+        data: enhancedRecords,
+        pagination: {
+          total: totalCount,
+          page,
+          limit,
+          totalPages: Math.ceil(totalCount / limit)
+        }
+      };
     } catch (error) {
       console.error('Error in getAttendanceList service:', error);
       throw new Error('Error fetching attendance list');
     }
-  }  
+  }
 
   async applyAttendanceRegularization(data) {
     // Ensure the `user` field is correctly set

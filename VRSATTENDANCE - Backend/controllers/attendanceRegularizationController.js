@@ -3,25 +3,29 @@ const attendanceRegularizationService = require('../services/attendanceRegulariz
 class AttendanceRegularizationController {
   async getAttendanceList(req, res) {
     try {
-      const user = req.user; // The user object should be populated from the request (e.g., by authentication middleware)
-      const attendanceList = await attendanceRegularizationService.getAttendanceList(user);
-
-      // Since attendanceList is now plain JavaScript objects (after using `.lean()` in the service),
-      // we can map directly over them.
-      res.status(200).json(attendanceList.map(attendance => {
-        console.log('Processed Attendance:', JSON.stringify(attendance, null, 2));
-        return {
-        ...attendance,  // No need for `.toObject()` since it's a plain object
-        regularizationType: attendance.leaveType, // Map leaveType to regularizationType
-        employeeName: attendance.user ? attendance.user.name : 'Unknown', // Provide default value if name is not available
-      };
-    }));
+      const user = req.user;
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 10;
+      const status = req.query.status;
+  
+      const result = await attendanceRegularizationService.getAttendanceList(user, page, limit, status);
+  
+      const formattedData = result.data.map(attendance => ({
+        ...attendance,
+        regularizationType: attendance.leaveType,
+        employeeName: attendance.user?.name || 'Unknown'
+      }));
+  
+      res.status(200).json({
+        records: formattedData,
+        pagination: result.pagination
+      });
     } catch (error) {
       console.error('Error in getAttendanceList controller:', error);
       res.status(500).json({ error: 'Error fetching attendance list', details: error.message });
     }
   }
-
+  
   async applyAttendanceRegularization(req, res) {
     try {
         const { approverName, startDate, endDate, remarks, regularizationType } = req.body;

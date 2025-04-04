@@ -177,3 +177,7 @@ exports.updateEmployeeDetails = async (adminUser, employeeId, updateData) => {
 
     return employee;
 };
+
+exports.getEmployeesUnderManager = async (managerEmail) => {
+    return await User.find({ managerEmail: managerEmail, role: 3 });
+};

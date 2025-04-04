@@ -26,6 +26,7 @@ router.get('/pdf/generate-user-tags-summary', authenticateToken, attendanceContr
 router.get('/excel/generate-user-tags-summary', authenticateToken, attendanceController.generateUserTagsAttendanceSummaryExcel);
 router.get('/pdf/generate-plaza-name-summary', authenticateToken, attendanceController.generateAttendanceReportSummaryByPlaza);
 router.get('/excel/generate-plaza-name-summary', authenticateToken, attendanceController.generateAttendanceReportSummaryByPlazaExcel);
+router.post('/mark-attendance-offline', authenticateToken, attendanceController.markAttendanceOffline);
 
 
 

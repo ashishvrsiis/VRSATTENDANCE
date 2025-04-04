@@ -36,6 +36,11 @@ const authenticateToken = async (req, res, next) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
+        if (user.isBlocked) {
+            console.log('User is blocked:', user.email);
+            return res.status(403).json({ message: 'Your account has been blocked. Please contact the administrator.' });
+        }
+
         // Populate req.user with necessary fields, including 'manager'
         req.user = {
             userId: user._id,

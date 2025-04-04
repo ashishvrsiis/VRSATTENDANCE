@@ -215,9 +215,12 @@ const loginUser = async (email, password) => {
     const user = await User.findOne({ email });
     if (!user) throw new Error('User not found.');
 
+        // Check if the user is blocked
+    if (user.isBlocked) throw new Error('This account has been temporarily disabled. Please contact your administrator for assistance.');
+
     // Verify the password
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) throw new Error('Invalid credentials');
+    if (!isMatch) throw new Error('The password you entered is incorrect. Please verify and try again.');
 
     // Ensure the user is approved
     if (!user.isApproved) throw new Error('User account is not approved yet.');
@@ -277,4 +280,64 @@ const verifyLoginOtp = async (email, otp) => {
     return { access: accessToken, refresh: refreshToken };
 };
 
-module.exports = { registerUser, loginUser, generateOTP, sendOtpEmail, verifyLoginOtp, toggleOtp };
+const blockUser = async (targetUserId, currentUser) => {
+    console.log(`Attempting to block user: ${targetUserId} by ${currentUser.email}`);
+
+    const targetUser = await User.findById(targetUserId);
+    if (!targetUser) {
+        throw new Error('User not found.');
+    }
+
+    // Role-based blocking logic
+    if (currentUser.role === 1) {
+        // Super Admin (1) can block Admin (2) & Employee/Manager (3)
+        if (![2, 3].includes(targetUser.role)) {
+            throw new Error('Super Admin can only block Admins and Employees.');
+        }
+    } else if (currentUser.role === 2) {
+        // Admin (2) can only block Employee/Manager (3)
+        if (targetUser.role !== 3) {
+            throw new Error('Admins can only block Employees.');
+        }
+    } else {
+        throw new Error('Unauthorized: Only Admins and Super Admins can block users.');
+    }
+
+    targetUser.isBlocked = true;
+    await targetUser.save();
+
+    console.log(`User ${targetUser.email} blocked successfully.`);
+    return { message: `User ${targetUser.email} has been blocked successfully.` };
+};
+
+const unblockUser = async (targetUserId, currentUser) => {
+    console.log(`Attempting to unblock user: ${targetUserId} by ${currentUser.email}`);
+
+    const targetUser = await User.findById(targetUserId);
+    console.log(`Target User Role: ${targetUser.role}`);
+    if (!targetUser) {
+        throw new Error('User not found.');
+    }
+
+    // Role-based unblocking logic (same as blocking)
+    if (currentUser.role === 1) {
+        if (![2, 3].includes(targetUser.role)) {
+            throw new Error('Super Admin can only unblock Admins and Employees.');
+        }
+    } else if (currentUser.role === 2) {
+        if (targetUser.role !== 3) {
+            throw new Error('Admins can only unblock Employees.');
+        }
+    } else {
+        throw new Error('Unauthorized: Only Admins and Super Admins can unblock users.');
+    }
+
+    targetUser.isBlocked = false;
+    await targetUser.save();
+
+    console.log(`User ${targetUser.email} unblocked successfully.`);
+    return { message: `User ${targetUser.email} has been unblocked successfully.` };
+};
+
+
+module.exports = { registerUser, loginUser, generateOTP, sendOtpEmail, verifyLoginOtp, toggleOtp, blockUser, unblockUser };

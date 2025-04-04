@@ -243,6 +243,101 @@ exports.markAttendance = async (userId, today, status, data) => {
     return { message: `Shift ${status} marked successfully at ${plazaName}.` };
 };
 
+exports.markAttendanceOffline = async (userId, today, status, data) => {
+    console.log(`markAttendanceOffline called with userId: ${userId}, date: ${today}, status: ${status}, data:`, data);
+
+    const managers = await User.find({ role: 3 });
+    console.log(managers); // All managers with the updated 'manager' field
+
+    // Validate status
+    if (status !== 'start' && status !== 'end') {
+        console.log('Error: Invalid status provided.');
+        throw new Error('Invalid status. Only "start" or "end" are allowed.');
+    }
+
+    // Fetch toll plaza data from the database
+    const tollPlazas = await Toll.find({});
+    console.log('Fetched toll plaza data from database:', tollPlazas);
+
+    // Check if the location is within 1 km of any toll plaza
+    let withinRange = false;
+    let plazaName = null;
+    const userLat = parseFloat(data.latitude);
+    const userLon = parseFloat(data.longitude);
+
+    for (const plaza of tollPlazas) {
+        const plazaLat = parseFloat(plaza.Latitude);
+        const plazaLon = parseFloat(plaza.Longitude);
+
+        const distance = getDistanceFromLatLonInKm(userLat, userLon, plazaLat, plazaLon);
+        console.log(`Distance to ${plaza.LocationName}: ${distance} km`);
+
+        if (distance <= 1) {
+            withinRange = true;
+            plazaName = plaza.LocationName;
+            break; // No need to check further if within range
+        }
+    }
+
+    // Find the latest attendance record for the user on the current day
+    let attendance = await Attendance.findOne({ userId, date: today }).sort({ createdAt: -1 });
+    console.log('Found attendance record:', attendance);
+
+    // Ensure attendanceTime is correctly assigned
+    const attendanceTime = data.attendanceTime ? new Date(data.attendanceTime) : new Date();
+    const syncedTime = new Date();
+
+    if (status === 'start') {
+        if (attendance && !attendance.punchOut) {
+            console.log('Error: An active shift is already started and not ended.');
+            throw new Error('You must end the current shift before starting a new one.');
+        }
+
+        if (!attendance || (attendance && attendance.punchOut)) {
+            attendance = new Attendance({
+                userId,
+                date: today,
+                punchIn: attendanceTime,
+                punchInTime: attendanceTime, // Ensure it's stored
+                plazaName,
+                isOffline: true,
+                syncedTime,
+                ...data
+            });
+            console.log('Created new offline attendance record:', attendance);
+        } else {
+            attendance.punchIn = attendanceTime;
+            attendance.punchInTime = attendanceTime; // Explicitly assign
+            attendance.plazaName = plazaName;
+            attendance.isOffline = true;
+            attendance.syncedTime = syncedTime;
+            Object.assign(attendance, data);
+            console.log('Updated existing offline attendance record for start:', attendance);
+        }
+    } else if (status === 'end') {
+        if (!attendance || !attendance.punchIn || attendance.punchOut) {
+            console.log('Error: No active shift started or shift already ended.');
+            throw new Error('You must start a shift before ending it.');
+        }
+
+        attendance.punchOut = attendanceTime;
+        attendance.punchOutTime = attendanceTime; // Ensure it's stored
+        attendance.isOffline = true;
+        attendance.syncedTime = syncedTime;
+        console.log('Updated existing offline attendance record for end:', attendance);
+    }
+
+    // Save the attendance record
+    await attendance.save();
+    console.log('Offline attendance saved successfully.');
+
+    return { 
+        message: `Offline Shift ${status} marked successfully at ${plazaName || 'Unknown Location'}.`, 
+        attendanceTime, 
+        syncedTime 
+    };
+};
+
 exports.getAttendanceByDateRange = async (userId, startDate, endDate) => {
     try {
         console.log(`Fetching attendance records for userId: ${userId}, date range: ${startDate} to ${endDate}`);

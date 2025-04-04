@@ -8,7 +8,9 @@ const attendanceSchema = new mongoose.Schema({
   plazaName: { type: String, default: null },
   latitude: { type: String, default: '' },
   longitude: { type: String, default: '' },
-  image: { type: String, default: '' }
+  image: { type: String, default: '' },
+  isOffline: { type: Boolean, default: false },
+  syncedTime: { type: Date },
 }, { timestamps: true });
 
 const Attendance = mongoose.models.Attendance || mongoose.model('Attendance', attendanceSchema);
