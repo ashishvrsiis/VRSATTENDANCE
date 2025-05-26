@@ -6,6 +6,7 @@ const attendanceSchema = new mongoose.Schema({
   punchIn: { type: Date, default: null },
   punchOut: { type: Date, default: null },
   plazaName: { type: String, default: null },
+  lastPlazaName: { type: String },
   latitude: { type: String, default: '' },
   longitude: { type: String, default: '' },
   image: { type: String, default: '' },

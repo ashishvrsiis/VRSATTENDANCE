@@ -15,10 +15,10 @@ const userSchema = new mongoose.Schema({
     position: { type: String },
     managerName: { type: String, default: null }, // Added field for manager's name
     managerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Reference to the manager's ID
-    managerEmail: { type: String, default: null }, // Store the manager's email instead of name
-    managerRole: { type: String, default: null }, // Optional field
-    workLocation: { type: String, default: null }, // Optional field
-    website: { type: String, default: null }, // Optional field
+    managerEmail: { type: String, default: null },
+    managerRole: { type: String, default: null },
+    workLocation: { type: String, default: null },
+    website: { type: String, default: null },
     deviceToken: { type: String },
     isApproved: { type: Boolean, default: false },
     isEmailVerified: { type: Boolean, default: false },
@@ -28,6 +28,8 @@ const userSchema = new mongoose.Schema({
     otpEnabled: { type: Boolean, default: false },
     UserTags: { type: [String], default: [] },
     isBlocked: { type: Boolean, default: false },
+    hasReceivedWelcomeNotification: { type: Boolean, default: false }
+    
 });
 
 

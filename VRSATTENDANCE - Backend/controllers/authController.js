@@ -5,6 +5,7 @@ const otpService = require('../services/otpService');
 const emailService = require('../services/LoginemailService');
 const verifyEmailService = require('../services/verifyEmailService');
 const { sendNotificationEmail } = require('../services/registrationemailService');
+const notificationService = require('../services/notificationService');
 
 
 const register = async (req, res) => {
@@ -60,15 +61,27 @@ const getPendingRegistrations = async (req, res) => {
     console.log('Fetching pending registrations...');
     try {
         if (req.user.role !== 1 && req.user.role !== 2) {
-            console.log('Access denied for user role:', req.user.role);
             return res.status(403).json({ message: 'Access denied' });
         }
-        const pendingUsers = await User.find({ isApproved: false });
-        console.log('Pending users:', pendingUsers);
-        res.status(200).json(pendingUsers);
 
-        const managers = await User.find({ role: 3 });
-        console.log(managers); // All managers with the updated 'manager' field
+        // Read pagination query params
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+
+        const [pendingUsers, total] = await Promise.all([
+            User.find({ isApproved: false }).skip(skip).limit(limit),
+            User.countDocuments({ isApproved: false })
+        ]);
+
+        const totalPages = Math.ceil(total / limit);
+
+        res.status(200).json({
+            data: pendingUsers,
+            total,
+            page,
+            totalPages
+        });
 
     } catch (error) {
         console.log('Error fetching pending registrations:', error);
@@ -90,8 +103,15 @@ const approveRegistration = async (req, res) => {
             console.log('User not found for ID:', id);
             return res.status(404).json({ message: 'User not found' });
         }
-        user.isApproved = true;
+        if (!user.isApproved) {
+            user.isApproved = true;
+      
+            if (!user.hasReceivedWelcomeNotification) {
+              await notificationService.sendWelcomeNotification(user);
+              user.hasReceivedWelcomeNotification = true;
+            }
         await user.save();
+        }
 
         console.log('Sending approval notification...');
         // Notify the user about approval

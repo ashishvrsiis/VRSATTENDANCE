@@ -8,12 +8,14 @@ const router = express.Router();
 
 router.get('/toll-plazas', authenticateToken, async (req, res) => {
     try {
-        const tollPlazas = await tollController.getTollPlazas();
-        res.status(200).json(tollPlazas);
+      const { page, limit } = req.query;
+  
+      const response = await tollController.getTollPlazas(page, limit);
+      res.status(200).json(response);
     } catch (error) {
-        res.status(500).json({ message: 'Server error', error: error.message });
+      res.status(500).json({ message: 'Server error', error: error.message });
     }
-});
+  });  
 
 router.post('/toll-plazas', authenticateToken, async (req, res) => {
     try {

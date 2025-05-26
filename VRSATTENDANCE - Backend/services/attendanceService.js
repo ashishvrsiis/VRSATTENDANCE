@@ -21,6 +21,8 @@ const { sendxlsxEmailWithAttachment} = require('../services/xlsxemailService');
 const leaveService = require('../services/leaveService');
 const { error } = require('console');
 const streamBuffers = require('stream-buffers');
+const Leave = require('../models/leaveModel');
+const MAX_HTML_SIZE_BYTES = parseInt(process.env.MAX_HTML_SIZE_BYTES || '524288000', 10); // 3MB default
 
 
 exports.getTodayAttendance = async (userId, date) => {
@@ -154,6 +156,18 @@ exports.markAttendance = async (userId, today, status, data) => {
         }
     }
 
+    let lastPlazaName = null;
+    if (!withinRange) {
+        const lastAttendanceWithPlaza = await Attendance.findOne({
+            userId,
+            plazaName: { $ne: null }
+        }).sort({ date: -1, createdAt: -1 });
+
+        lastPlazaName = lastAttendanceWithPlaza?.plazaName || null;
+    }
+
+    const now = new Date();
+
     // Find the latest attendance record for the user on the current day
     let attendance = await Attendance.findOne({ userId, date: today }).sort({ createdAt: -1 });
     console.log('Found attendance record:', attendance);
@@ -169,13 +183,13 @@ exports.markAttendance = async (userId, today, status, data) => {
                 userId,
                 date: today,
                 punchIn: new Date(),
-                plazaName,
+                plazaName: plazaName || lastPlazaName,
                 ...data
             });
             console.log('Created new attendance record:', attendance);
         } else {
             attendance.punchIn = new Date();
-            attendance.plazaName = plazaName;
+            attendance.plazaName = plazaName || lastPlazaName;
             Object.assign(attendance, data);
             console.log('Updated existing attendance record for start:', attendance);
         }
@@ -187,6 +201,7 @@ exports.markAttendance = async (userId, today, status, data) => {
         }
 
         attendance.punchOut = new Date();
+        attendance.plazaName = attendance.plazaName || plazaName || lastPlazaName;
         console.log('Updated existing attendance record for end:', attendance);
     }
 
@@ -220,7 +235,7 @@ exports.markAttendance = async (userId, today, status, data) => {
                 approverName: managerName,
                 startDate: today,
                 endDate: today,
-                remarks: 'Attendance marked outside the toll plaza range',
+                remarks: `Attendance marked outside the toll plaza range` + (lastPlazaName ? `. Last known plaza: ${lastPlazaName}` : ''),
                 leaveType: 'OutOfRange', // Provide a valid leaveType here
                 regularizationType: 'Out of range',
                 userId,
@@ -231,8 +246,9 @@ exports.markAttendance = async (userId, today, status, data) => {
         // Add a recent activity for attendance outside range if it’s punch-in or punch-out
         const recentActivity = new RecentActivity({
             userId,
-            activity: `Attendance marked outside the toll plaza range for ${today}.`, // Set the `activity` field to a descriptive message
-            timestamp: new Date()
+            activity: `Attendance marked outside the toll plaza range for ${today}.` + 
+            (lastPlazaName ? ` Last known plaza: ${lastPlazaName}.` : ''),
+              timestamp: new Date()
         });
         await recentActivity.save();
         console.log('Recent activity for out-of-range attendance saved successfully.');
@@ -279,6 +295,17 @@ exports.markAttendanceOffline = async (userId, today, status, data) => {
         }
     }
 
+     // If not within range, get last known plaza name
+     let lastPlazaName = null;
+     if (!withinRange) {
+         const lastAttendanceWithPlaza = await Attendance.findOne({
+             userId,
+             plazaName: { $ne: null }
+         }).sort({ date: -1, createdAt: -1 });
+ 
+         lastPlazaName = lastAttendanceWithPlaza?.plazaName || null;
+     }
+
     // Find the latest attendance record for the user on the current day
     let attendance = await Attendance.findOne({ userId, date: today }).sort({ createdAt: -1 });
     console.log('Found attendance record:', attendance);
@@ -299,7 +326,7 @@ exports.markAttendanceOffline = async (userId, today, status, data) => {
                 date: today,
                 punchIn: attendanceTime,
                 punchInTime: attendanceTime, // Ensure it's stored
-                plazaName,
+                plazaName: plazaName || lastPlazaName,
                 isOffline: true,
                 syncedTime,
                 ...data
@@ -308,7 +335,7 @@ exports.markAttendanceOffline = async (userId, today, status, data) => {
         } else {
             attendance.punchIn = attendanceTime;
             attendance.punchInTime = attendanceTime; // Explicitly assign
-            attendance.plazaName = plazaName;
+            attendance.plazaName = plazaName || lastPlazaName;
             attendance.isOffline = true;
             attendance.syncedTime = syncedTime;
             Object.assign(attendance, data);
@@ -322,6 +349,7 @@ exports.markAttendanceOffline = async (userId, today, status, data) => {
 
         attendance.punchOut = attendanceTime;
         attendance.punchOutTime = attendanceTime; // Ensure it's stored
+        attendance.plazaName = attendance.plazaName || plazaName || lastPlazaName;
         attendance.isOffline = true;
         attendance.syncedTime = syncedTime;
         console.log('Updated existing offline attendance record for end:', attendance);
@@ -332,7 +360,7 @@ exports.markAttendanceOffline = async (userId, today, status, data) => {
     console.log('Offline attendance saved successfully.');
 
     return { 
-        message: `Offline Shift ${status} marked successfully at ${plazaName || 'Unknown Location'}.`, 
+        message: `Offline Shift ${status} marked successfully at ${plazaName || lastPlazaName || 'Unknown Location'}.`,
         attendanceTime, 
         syncedTime 
     };
@@ -356,12 +384,14 @@ exports.getAttendanceByDateRange = async (userId, startDate, endDate) => {
             user: userObjectId,
             startDate: { $lte: endDate },
             endDate: { $gte: startDate },
-            status: 'Approved'
+            // status: 'Approved'
         }).lean();
+
+        const approvedRegularizations = regularizations.filter(r => r.status === 'Approved');
 
         // Map regularization dates for quick lookup
         const regularizedDates = new Set();
-        regularizations.forEach(reg => {
+        approvedRegularizations.forEach(reg => {
             const current = moment(reg.startDate);
             const end = moment(reg.endDate);
             while (current.isSameOrBefore(end)) {
@@ -417,8 +447,19 @@ exports.getAttendanceByDateRange = async (userId, startDate, endDate) => {
                 if (shiftStartMarked && shiftEndMarked) {
                     const punchInTime = moment(record.punchIn);
                     const punchOutTime = moment(record.punchOut);
-                    totalWorkingHours = moment.duration(punchOutTime.diff(punchInTime)).humanize();
-                } else if (shiftStartMarked && !shiftEndMarked) {
+                    const duration = moment.duration(punchOutTime.diff(punchInTime));
+                    const totalMinutes = duration.asMinutes();
+                
+                    if (totalMinutes >= 480) {
+                        totalWorkingHours = '8 hours';
+                    } else {
+                        const hours = Math.floor(totalMinutes / 60);
+                        const minutes = Math.floor(totalMinutes % 60);
+                        totalWorkingHours =
+                            minutes === 0 ? `${hours} hours` : `${hours} hours ${minutes} minutes`;
+                    }
+                }
+                 else if (shiftStartMarked && !shiftEndMarked) {
                     totalWorkingHours = 'Shift not marked end';
                 } else {
                     totalWorkingHours = isRegularized ? 'Attendance Regularized' : 'No working hours';
@@ -466,7 +507,11 @@ exports.getAttendanceByDateRange = async (userId, startDate, endDate) => {
         });
 
         console.log('Final Formatted Records:', JSON.stringify(formattedRecords, null, 2));
-        return formattedRecords;
+        return {
+            attendance: formattedRecords,
+            regularizations
+          };
+          
 
     } catch (error) {
         console.error('Error fetching attendance by date range:', error);
@@ -498,12 +543,14 @@ exports.retrieveAttendanceHistoryByDateRange = async (userId, startDate, endDate
             user: userObjectId,
             startDate: { $lte: endDate },
             endDate: { $gte: startDate },
-            status: 'Approved'
+            // status: 'Approved'
         }).lean();
+
+        const approvedRegularizations = regularizations.filter(r => r.status === 'Approved');
 
         // Map regularization dates for quick lookup
         const regularizedDates = new Set();
-        regularizations.forEach(reg => {
+        approvedRegularizations.forEach(reg => {
             const current = moment(reg.startDate);
             const end = moment(reg.endDate);
             while (current.isSameOrBefore(end)) {
@@ -552,8 +599,8 @@ exports.retrieveAttendanceHistoryByDateRange = async (userId, startDate, endDate
 
             return {
                 date: record.date,
-                punchIn: record.punchIn ? record.punchIn.toISOString() : null,
-                punchOut: record.punchOut ? record.punchOut.toISOString() : null,
+                punchIn: record.punchIn ? new Date(record.punchIn).toISOString() : null,
+                punchOut: record.punchOut ? new Date(record.punchOut).toISOString() : null,
                 shift_start_marked: shiftStartMarked,
                 shift_end_marked: shiftEndMarked,
                 image: record.image ? `data:image/jpeg;base64,${record.image}` : '', // Include base64 image
@@ -593,224 +640,420 @@ exports.retrieveAttendanceHistoryByDateRange = async (userId, startDate, endDate
 
         console.log('Final formatted records:', JSON.stringify(formattedRecords, null, 2));
 
-        return formattedRecords;
+        return {
+            attendance: formattedRecords,
+            regularizations
+          };
     } catch (error) {
         console.error('Error fetching attendance by date range:', error);
         throw new Error('Error fetching attendance history');
     }
 };
 
-exports.generateAttendanceReportPDF = async (startDate, endDate, req, res, deliveryMethod, recipientEmail) => {
-    try {
-        console.log(`🔹 Start Date: ${startDate}, End Date: ${endDate}`);
-        console.log(`🔹 Delivery Method: ${deliveryMethod}`);
-        console.log(`🔹 Recipient Email: ${recipientEmail || 'N/A'}`);
+// exports.generateAttendanceReportPDF = async (startDate, endDate, req, res, deliveryMethod, recipientEmail) => {
+//     try {
+//         console.log(`🔹 Start Date: ${startDate}, End Date: ${endDate}`);
+//         console.log(`🔹 Delivery Method: ${deliveryMethod}`);
+//         console.log(`🔹 Recipient Email: ${recipientEmail || 'N/A'}`);
 
-        const normalizedDeliveryMethod = (deliveryMethod || '').toLowerCase();
-        if (!['download', 'email'].includes(normalizedDeliveryMethod)) {
-            console.error(`❌ Invalid delivery method: ${normalizedDeliveryMethod}`);
-            return res.status(400).json({ message: 'Invalid delivery method.' });
-        }
-        console.log('📌 Fetching users...');
-        const users = await User.find({});
-        console.log(`✅ Total users found: ${users.length}`);
+//         const normalizedDeliveryMethod = (deliveryMethod || '').toLowerCase();
+//         if (!['download', 'email'].includes(normalizedDeliveryMethod)) {
+//             console.error(`❌ Invalid delivery method: ${normalizedDeliveryMethod}`);
+//             return res.status(400).json({ message: 'Invalid delivery method.' });
+//         }
+//         console.log('📌 Fetching users...');
+//         const users = await User.find({}).lean();
+//         console.log(`✅ Total users found: ${users.length}`);
 
-        if (users.length === 0) {
-            console.warn('⚠️ No users found.');
-            return res.status(404).json({ message: 'No users found' });
-        }
+//         if (users.length === 0) {
+//             console.warn('⚠️ No users found.');
+//             return res.status(404).json({ message: 'No users found' });
+//         }
 
-        const templatePath = path.join(__dirname, '..', 'templates', 'AttendanceReportUI.html');
-        console.log(`📄 Template Path: ${templatePath}`);
-        let templateSource;
-        try {
-            templateSource = fs.readFileSync(templatePath, 'utf-8');
-            console.log('✅ Template loaded successfully.');
-        } catch (templateError) {
-            console.error('❌ Error reading template file:', err);
-            throw new Error('Template file not found or inaccessible.');
-        }
-        const template = handlebars.compile(templateSource);
-        console.log('✅ Template compiled.');
+//         const usersWithId = users.filter(u => !!u.employeeId).sort((a, b) => {
+//             return parseInt(a.employeeId) - parseInt(b.employeeId);
+//           });
+//           const usersWithoutId = users.filter(u => !u.employeeId);
+//           const sortedUsers = [...usersWithId, ...usersWithoutId];
 
-        console.log('🛠 Processing users data for the report...');
-        const usersData = await Promise.all(users.map(async (user) => {
-            console.log(`👤 Processing User: ${user.name} (ID: ${user._id})`);
-            const attendanceRecords = await this.getAttendanceByDateRange(user._id.toString(), startDate, endDate).catch(err => {
-                console.error(`❌ Error fetching attendance for ${user.name}:`, err);
-                return [];
-            });            
-            console.log(`✅ Total attendance records for ${user.name}: ${attendanceRecords.length}`);
+//         const templatePath = path.join(__dirname, '..', 'templates', 'AttendanceReportUI.html');
+//         console.log(`📄 Template Path: ${templatePath}`);
+//         let templateSource;
+//         try {
+//             templateSource = fs.readFileSync(templatePath, 'utf-8');
+//             console.log('✅ Template loaded successfully.');
+//         } catch (templateError) {
+//             console.error('❌ Error reading template file:', err);
+//             throw new Error('Template file not found or inaccessible.');
+//         }
+//         const template = handlebars.compile(templateSource);
+//         console.log('✅ Template compiled.');
 
-             // Fetch regularizations
-             const regularizations = await AttendanceRegularization.find({
-                user: user._id,
-                startDate: { $lte: endDate },
-                endDate: { $gte: startDate },
-                status: 'Approved',
-            })
-            .select('user startDate endDate status approvedBy')
-            .lean();
+//         console.log('🛠 Processing users data for the report...');
+//         const usersData = await Promise.all(sortedUsers.map(async (user) => {
+//             console.log(`👤 Processing User: ${user.name} (ID: ${user._id})`);
+//             const result = await this.getAttendanceByDateRange(user._id.toString(), startDate, endDate).catch(err => {
+//                 console.error(`❌ Error fetching attendance for ${user.name}:`, err);
+//                 return { attendance: [] };
+//             });
+//             const attendanceRecords = Array.isArray(result) ? result : result.attendance || [];
+//             console.log(`✅ Total attendance records for ${user.name}: ${attendanceRecords.length}`);            
 
-            const regularizedDates = new Map();
-            regularizations.forEach(reg => {
-                const current = moment(reg.startDate);
-                const end = moment(reg.endDate);
-                while (current.isSameOrBefore(end)) {
-                    regularizedDates.set(current.format('DD-MM-YYYY'), reg.approvedBy);
-                    current.add(1, 'days');
-                }
-            });
+//              // Fetch regularizations
+//              const regularizations = await AttendanceRegularization.find({
+//                 user: user._id,
+//                 startDate: { $lte: endDate },
+//                 endDate: { $gte: startDate },
+//                 // status: 'Approved',
+//             })
+//             .select('user startDate endDate status approvedBy')
+//             .lean();
+//             const regularizedDates = new Map();
+//                 regularizations.forEach(reg => {
+//                     const current = moment(reg.startDate);
+//                     const end = moment(reg.endDate);
+//                     while (current.isSameOrBefore(end)) {
+//                         const dateKey = current.format('DD-MM-YYYY');
+//                         regularizedDates.set(dateKey, {
+//                             approvedBy: reg.approvedBy || 'N/A',
+//                             status: reg.status
+//                         });
+//                         current.add(1, 'days');
+//                     }
+//                 });
 
-            const totalDays = moment(endDate).diff(moment(startDate), 'days') + 1;
-            let totalPresent = 0;
-            let totalLeaves = 0;
-            let totalPaidDays = 0;
-            // Process attendance records
-            const processedAttendanceRecords = attendanceRecords.map((record, index) => {
-                const punchIn = record.punchIn ? moment(record.punchIn) : null;
-                const punchOut = record.punchOut ? moment(record.punchOut) : null;
 
-                let status = 'Absent'; // Default status
-                let totalWorkingHours = record.totalWorkingHours || 'N/A';
+//             const totalDays = moment(endDate).diff(moment(startDate), 'days') + 1;
+//             let totalPresent = 0;
+//             let totalLeaves = 0;
+//             let totalPaidDays = 0;
+//             // Process attendance records
+//             const processedAttendanceRecords = attendanceRecords.map((record, index) => {
+//                 const punchIn = record.punchIn ? moment(record.punchIn) : null;
+//                 const punchOut = record.punchOut ? moment(record.punchOut) : null;
 
-                if (totalWorkingHours === 'Shift not marked end' || totalWorkingHours === 'Attendance Regularized') {
-                    status  = 'Present';
-                    totalWorkingHours = 'Shift not marked end'; // Keep it as is
-                } else if (punchIn && punchOut) {
-                    const duration = moment.duration(punchOut.diff(punchIn));
-                    const hours = duration.hours(); // Get total hours
-                    const minutes = duration.minutes(); // Get remaining minutes
-                    totalWorkingHours = `${hours} Hours${minutes > 0 ? ` ${minutes} Minutes` : ''}`;
+//                 let status = 'Absent'; // Default status
+//                 let totalWorkingHours = record.totalWorkingHours || 'N/A';
 
-                    if (punchIn && punchOut) {
-                        const duration = moment.duration(punchOut.diff(punchIn));
-                        const hours = duration.hours();
-                        const minutes = duration.minutes();
+//                 if (totalWorkingHours === 'Shift not marked end' || totalWorkingHours === 'Attendance Regularized') {
+//                     status  = 'Present';
+//                     totalWorkingHours = 'Shift not marked end'; // Keep it as is
+//                 } else if (punchIn && punchOut) {
+//                     const duration = moment.duration(punchOut.diff(punchIn));
+//                     const hours = duration.hours(); // Get total hours
+//                     const minutes = duration.minutes(); // Get remaining minutes
+//                     totalWorkingHours = `${hours} Hours${minutes > 0 ? ` ${minutes} Minutes` : ''}`;
+
+//                     if (punchIn && punchOut) {
+//                         const duration = moment.duration(punchOut.diff(punchIn));
+//                         const hours = duration.hours();
+//                         const minutes = duration.minutes();
                         
-                        totalWorkingHours = `${hours} Hours${minutes > 0 ? ` ${minutes} Minutes` : ''}`;
+//                         totalWorkingHours = `${hours} Hours${minutes > 0 ? ` ${minutes} Minutes` : ''}`;
                 
-                        if (hours >= 8) {
-                            status = 'Present';
-                        } else if (hours > 0) {
-                            status = 'Half Day Present';
-                        }
-                    }
-                }
-                const dateKey = moment(record.date).format('DD-MM-YYYY');
+//                         if (hours >= 8) {
+//                             status = 'Present';
+//                         } else if (hours > 0) {
+//                             status = 'Half Day Present';
+//                         }
+//                     }
+//                 }
+//                 const dateKey = moment(record.date).format('DD-MM-YYYY');
+//                 const regularizationInfo = regularizedDates.get(dateKey);
 
-                if (status === 'Present') {
-                    totalPresent += 1;
-                } else if (status === 'Half Day Present') {
-                    totalPresent += 0.5;
-                }
-                return {
-                    serialNo: index + 1,
-                    date: moment(record.date).format('DD-MM-YYYY'),
-                    image: record.image,
-                    punchIn: punchIn ? punchIn.format('hh:mm A') : 'N/A',
-                    punchOut: punchOut ? punchOut.format('hh:mm A') : 'N/A',
-                    totalWorkingHours: totalWorkingHours,
-                    status: status, // Attendance status
-                    attendanceRegularized: regularizedDates.has(dateKey) ? 'Yes' : 'No',
-                    approvedBy: regularizedDates.get(dateKey) || 'N/A',
-                };
-            });
+//                 if (status === 'Present') {
+//                     totalPresent += 1;
+//                 } else if (status === 'Half Day Present') {
+//                     totalPresent += 0.5;
+//                 }
+//                 return {
+//                     serialNo: index + 1,
+//                     date: moment(record.date).format('DD-MM-YYYY'),
+//                     image: record.image,
+//                     punchIn: punchIn ? punchIn.format('hh:mm A') : 'N/A',
+//                     punchOut: punchOut ? punchOut.format('hh:mm A') : 'N/A',
+//                     totalWorkingHours: totalWorkingHours,
+//                     status: status, // Attendance status
+//                     attendanceRegularized: regularizationInfo ? 'Yes' : 'No',
+//                     approvedBy: regularizationInfo?.approvedBy || 'N/A',
+//                     regularizationStatus: regularizationInfo?.status || 'Not Applied'
+//                 };
+//             });
 
-            let leaveRequests = [];
-            try {
-                leaveRequests = await leaveService.getLeaveRequests(user._id, user.role);
-                totalLeaves = leaveRequests.length;
-                totalPaidDays = totalPresent + totalLeaves;
-                console.log(`✅ Processed leave data for ${user.name}: ${totalLeaves} leaves.`);
-            } catch (err) {
-                console.error(`❌ Error fetching leave requests for ${user.name}:`, err);
-            }
+//             let leaveRequests = [];
+//             try {
+//                 leaveRequests = await leaveService.getLeaveRequests(user._id, user.role);
+//                 totalLeaves = leaveRequests.data.length;
+//                 totalPaidDays = totalPresent + totalLeaves;
+//                 console.log(`✅ Processed leave data for ${user.name}: ${totalLeaves} leaves.`);
+//             } catch (err) {
+//                 console.error(`❌ Error fetching leave requests for ${user.name}:`, err);
+//             }
 
-            return {
-                name: user.name,
-                email: user.email,
-                phone: user.phone,
-                dateOfBirth: user.dateOfBirth ? moment(user.dateOfBirth).format('DD-MM-YYYY') : 'Not provided',
-                employeeId: user.employeeId,
-                position: user.position,
-                managerName: user.managerName,
-                managerRole: user.managerRole,
-                workLocation: user.workLocation,
-                fatherName: user.fatherName,
-                plazaName: user.plazaName,
-                attendanceRecords: processedAttendanceRecords, // Use the processed records
-                summary: { totalDays, totalPresent, totalLeaves, totalPaidDays },
-            };
-        }));
+//             return {
+//                 name: user.name,
+//                 email: user.email,
+//                 phone: user.phone,
+//                 dateOfBirth: user.dateOfBirth ? moment(user.dateOfBirth).format('DD-MM-YYYY') : 'Not provided',
+//                 employeeId: user.employeeId,
+//                 position: user.position,
+//                 managerName: user.managerName,
+//                 managerRole: user.managerRole,
+//                 workLocation: user.workLocation,
+//                 fatherName: user.fatherName,
+//                 plazaName: user.plazaName,
+//                 attendanceRecords: processedAttendanceRecords, // Use the processed records
+//                 summary: { totalDays, totalPresent, totalLeaves, totalPaidDays },
+//             };
+//         }));
 
-        console.log('✅ User data processing complete.');
-        console.log('📌 Generating HTML content...');        
-        const reportData = {
-            startDate: moment(startDate).format('MMMM Do, YYYY'),
-            endDate: moment(endDate).format('MMMM Do, YYYY'),
-            users: usersData,
-        };
-        console.log('📌 Report Data:', JSON.stringify(reportData, null, 2));
-        const htmlContent = template(reportData);
-        console.log('✅ HTML content generated.');
-        console.log('🚀 Launching Puppeteer...');
-        const browser = await puppeteer.launch();
-        const page = await browser.newPage();
-        await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
+//         console.log('✅ User data processing complete.');
+//         console.log('📌 Generating HTML content...');        
+//         const reportData = {
+//             startDate: moment(startDate).format('MMMM Do, YYYY'),
+//             endDate: moment(endDate).format('MMMM Do, YYYY'),
+//             users: usersData,
+//         };
+//         console.log('📌 Report Data:', JSON.stringify(reportData, null, 2));
+//         const htmlContent = template(reportData);
+//         console.log('✅ HTML content generated.');
+//         console.log('🚀 Launching Puppeteer...');
+//         const browser = await puppeteer.launch();
+//         const page = await browser.newPage();
+//         await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
 
-        console.log('📄 Generating PDF...');
-        const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
-        await browser.close();
-        console.log('Sending PDF response...');
-        if (deliveryMethod === 'download') {
-            console.log('Delivery Method: Download');
-            console.log('📥 Sending PDF response for download...');
-            res.setHeader('Content-Type', 'application/pdf');
-            res.setHeader(
-                'Content-Disposition',
-                `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.pdf`
-            );
-            return res.end(pdfBuffer);
-        } else if (deliveryMethod === 'email') {
-            console.log('Delivery Method: Email');
-            console.log('📧 Sending email with PDF attachment...');
-            if (!recipientEmail) {
-                return res.status(400).json({ message: 'Recipient email is required for emailing the report.' });
-            }
+//         console.log('📄 Generating PDF...');
+//         const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
+//         await browser.close();
+//         console.log('Sending PDF response...');
+//         if (deliveryMethod === 'download') {
+//             console.log('Delivery Method: Download');
+//             console.log('📥 Sending PDF response for download...');
+//             res.setHeader('Content-Type', 'application/pdf');
+//             res.setHeader(
+//                 'Content-Disposition',
+//                 `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.pdf`
+//             );
+//             return res.end(pdfBuffer);
+//         } else if (deliveryMethod === 'email') {
+//             console.log('Delivery Method: Email');
+//             console.log('📧 Sending email with PDF attachment...');
+//             if (!recipientEmail) {
+//                 return res.status(400).json({ message: 'Recipient email is required for emailing the report.' });
+//             }
 
-            const subject = 'Attendance Report';
-            const name = req.user?.name || 'User';
-            const message = 'Please find your attendance report attached to this email.';
+//             const subject = 'Attendance Report';
+//             const name = req.user?.name || 'User';
+//             const message = 'Please find your attendance report attached to this email.';
 
-            await sendEmailWithAttachment(recipientEmail, { buffer: pdfBuffer }, { subject, name, message, fileType: 'pdf' });
-            console.log('✅ Email sent successfully.');
-            return res.status(200).json({ message: 'Attendance report emailed successfully.' });
-        } else {
-            console.error('❌ Error sending email:', error);
-            return res.status(400).json({ message: 'Invalid delivery method.' });
-        }
-    } catch (error) {
-        console.error('❌ Error during PDF generation:', error);
-        res.status(500).json({ message: 'Failed to generate the report.' });
+//             await sendEmailWithAttachment(recipientEmail, { buffer: pdfBuffer }, { subject, name, message, fileType: 'pdf' });
+//             console.log('✅ Email sent successfully.');
+//             return res.status(200).json({ message: 'Attendance report emailed successfully.' });
+//         } else {
+//             console.error('❌ Error sending email:', error);
+//             return res.status(400).json({ message: 'Invalid delivery method.' });
+//         }
+//     } catch (error) {
+//         console.error('❌ Error during PDF generation:', error);
+//         res.status(500).json({ message: 'Failed to generate the report.' });
+//     }
+// };
+
+exports.generateAttendanceReportPDF = async (startDate, endDate, req, res, deliveryMethod, recipientEmail) => {
+  try {
+    console.log(`🔹 Start Date: ${startDate}, End Date: ${endDate}`);
+    console.log(`🔹 Delivery Method: ${deliveryMethod}`);
+    console.log(`🔹 Recipient Email: ${recipientEmail || 'N/A'}`);
+
+    const normalizedDeliveryMethod = (deliveryMethod || '').toLowerCase();
+    if (!['download', 'email'].includes(normalizedDeliveryMethod)) {
+      return res.status(400).json({ message: 'Invalid delivery method.' });
     }
+
+    const users = await User.find({}).lean();
+    if (users.length === 0) {
+      return res.status(404).json({ message: 'No users found' });
+    }
+
+    const usersWithId = users.filter(u => !!u.employeeId).sort((a, b) => parseInt(a.employeeId) - parseInt(b.employeeId));
+    const usersWithoutId = users.filter(u => !u.employeeId);
+    const sortedUsers = [...usersWithId, ...usersWithoutId];
+
+    const templatePath = path.join(__dirname, '..', 'templates', 'AttendanceReportUI.html');
+    const templateSource = fs.readFileSync(templatePath, 'utf-8');
+    const template = handlebars.compile(templateSource);
+
+    const usersData = [];
+    let estimatedHtmlSize = 0;
+
+    for (const user of sortedUsers) {
+      const result = await exports.getAttendanceByDateRange(user._id.toString(), startDate, endDate).catch(err => {
+        return { attendance: [] };
+      });
+      const attendanceRecords = Array.isArray(result) ? result : result.attendance || [];
+
+      const regularizations = await AttendanceRegularization.find({
+        user: user._id,
+        startDate: { $lte: endDate },
+        endDate: { $gte: startDate },
+      }).select('user startDate endDate status approvedBy').lean();
+
+      const regularizedDates = new Map();
+      regularizations.forEach(reg => {
+        const current = moment(reg.startDate);
+        const end = moment(reg.endDate);
+        while (current.isSameOrBefore(end)) {
+          const dateKey = current.format('DD-MM-YYYY');
+          regularizedDates.set(dateKey, {
+            approvedBy: reg.approvedBy || 'N/A',
+            status: reg.status,
+          });
+          current.add(1, 'days');
+        }
+      });
+
+      let totalPresent = 0;
+      let totalLeaves = 0;
+      let totalPaidDays = 0;
+      const totalDays = moment(endDate).diff(moment(startDate), 'days') + 1;
+
+      const processedAttendanceRecords = attendanceRecords.map((record, index) => {
+        const punchIn = record.punchIn ? moment(record.punchIn) : null;
+        const punchOut = record.punchOut ? moment(record.punchOut) : null;
+
+        let status = 'Absent';
+        let totalWorkingHours = record.totalWorkingHours || 'N/A';
+
+        if (totalWorkingHours === 'Shift not marked end' || totalWorkingHours === 'Attendance Regularized') {
+          status = 'Present';
+          totalWorkingHours = 'Shift not marked end';
+        } else if (punchIn && punchOut) {
+          const duration = moment.duration(punchOut.diff(punchIn));
+          const hours = duration.hours();
+          const minutes = duration.minutes();
+          totalWorkingHours = `${hours} Hours${minutes > 0 ? ` ${minutes} Minutes` : ''}`;
+
+          if (hours >= 8) status = 'Present';
+          else if (hours > 0) status = 'Half Day Present';
+        }
+
+        const dateKey = moment(record.date).format('DD-MM-YYYY');
+        const regularizationInfo = regularizedDates.get(dateKey);
+
+        if (status === 'Present') totalPresent += 1;
+        else if (status === 'Half Day Present') totalPresent += 0.5;
+
+        return {
+          serialNo: index + 1,
+          date: moment(record.date).format('DD-MM-YYYY'),
+          image: record.image,
+          punchIn: punchIn ? punchIn.format('hh:mm A') : 'N/A',
+          punchOut: punchOut ? punchOut.format('hh:mm A') : 'N/A',
+          totalWorkingHours,
+          status,
+          attendanceRegularized: regularizationInfo ? 'Yes' : 'No',
+          approvedBy: regularizationInfo?.approvedBy || 'N/A',
+          regularizationStatus: regularizationInfo?.status || 'Not Applied',
+        };
+      });
+
+      const leaveRequests = await leaveService.getLeaveRequests(user._id, user.role).catch(() => ({ data: [] }));
+      totalLeaves = leaveRequests.data.length;
+      totalPaidDays = totalPresent + totalLeaves;
+
+      const userData = {
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        dateOfBirth: user.dateOfBirth ? moment(user.dateOfBirth).format('DD-MM-YYYY') : 'Not provided',
+        employeeId: user.employeeId,
+        position: user.position,
+        managerName: user.managerName,
+        managerRole: user.managerRole,
+        workLocation: user.workLocation,
+        fatherName: user.fatherName,
+        plazaName: user.plazaName,
+        attendanceRecords: processedAttendanceRecords,
+        summary: { totalDays, totalPresent, totalLeaves, totalPaidDays },
+      };
+
+      const testHtml = template({
+        startDate: moment(startDate).format('MMMM Do, YYYY'),
+        endDate: moment(endDate).format('MMMM Do, YYYY'),
+        users: [...usersData, userData],
+      });
+      const size = Buffer.byteLength(testHtml, 'utf8');
+      if (size >= MAX_HTML_SIZE_BYTES) {
+        console.warn('⚠️ Max HTML size reached. Stopping user data appending.');
+        break;
+      }
+
+      usersData.push(userData);
+      estimatedHtmlSize = size;
+    }
+
+    const reportData = {
+      startDate: moment(startDate).format('MMMM Do, YYYY'),
+      endDate: moment(endDate).format('MMMM Do, YYYY'),
+      users: usersData,
+    };
+    const htmlContent = template(reportData);
+    const browser = await puppeteer.launch();
+    const page = await browser.newPage();
+    await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
+    const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
+    await browser.close();
+
+    if (deliveryMethod === 'download') {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.pdf`);
+      return res.end(pdfBuffer);
+    } else if (deliveryMethod === 'email') {
+      if (!recipientEmail) {
+        return res.status(400).json({ message: 'Recipient email is required for emailing the report.' });
+      }
+
+      const subject = 'Attendance Report';
+      const name = req.user?.name || 'User';
+      const message = `Please find your attendance report attached.${usersData.length < sortedUsers.length ? `\n\nNote: Only the first ${usersData.length} users were included due to PDF size constraints.` : ''}`;
+
+      await sendEmailWithAttachment(recipientEmail, { buffer: pdfBuffer }, { subject, name, message, fileType: 'pdf' });
+      return res.status(200).json({
+        message: usersData.length < sortedUsers.length ? 'Partial report emailed due to size limit.' : 'Attendance report emailed successfully.',
+        includedUsers: usersData.length,
+        estimatedHtmlSize,
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error during PDF generation:', error);
+    res.status(500).json({ message: 'Failed to generate the report.' });
+  }
 };
 
 exports.generateAttendanceReportExcel = async (startDate, endDate, res, deliveryMethod, recipientEmail) => {
     try {
-        const users = await User.find({});
+        const users = await User.find({}).lean();
 
         if (users.length === 0) {
             return res.status(404).json({ message: 'No users found' });
         }
 
-        const usersData = await Promise.all(users.map(async (user, userIndex) => {
-            const attendanceRecords = await this.getAttendanceByDateRange(user._id.toString(), startDate, endDate);
+        const usersWithId = users.filter(u => !!u.employeeId).sort((a, b) => parseInt(a.employeeId) - parseInt(b.employeeId));
+        const usersWithoutId = users.filter(u => !u.employeeId);
+        const sortedUsers = [...usersWithId, ...usersWithoutId];
+
+        const usersData = await Promise.all(sortedUsers.map(async (user, userIndex) => {
+            const result = await this.getAttendanceByDateRange(user._id.toString(), startDate, endDate).catch(err => {
+                console.error(`❌ Error fetching attendance for ${user.name}:`, err);
+                return { attendance: [] };
+            });
+            const attendanceRecords = Array.isArray(result) ? result : result.attendance || [];
+            console.log(`✅ Total attendance records for ${user.name}: ${attendanceRecords.length}`);   
             const regularizations = await AttendanceRegularization.find({
                 user: user._id,
                 startDate: { $lte: endDate },
                 endDate: { $gte: startDate },
-                status: 'Approved'
+                // status: 'Approved'
             })
             .select('user startDate endDate status approvedBy')
             .lean();
@@ -821,7 +1064,11 @@ exports.generateAttendanceReportExcel = async (startDate, endDate, res, delivery
                 const current = moment(reg.startDate);
                 const end = moment(reg.endDate);
                 while (current.isSameOrBefore(end)) {
-                    regularizedDates.set(current.format('DD-MM-YYYY'), reg.approvedBy);
+                    const dateKey = current.format('DD-MM-YYYY');
+                    regularizedDates.set(dateKey, {
+                        approvedBy: reg.approvedBy || 'N/A',
+                        status: reg.status
+                    });
                     current.add(1, 'days');
                 }
             });
@@ -833,7 +1080,7 @@ exports.generateAttendanceReportExcel = async (startDate, endDate, res, delivery
 
             try {
                 const leaveRequests = await leaveService.getLeaveRequests(user._id, user.role);
-                totalLeaves = leaveRequests.length;
+                totalLeaves = leaveRequests.data.length;
                 console.log(`\u2705 Processed leave data for ${user.name}: ${totalLeaves} leaves.`);
             } catch (err) {
                 console.error(`\u274c Error fetching leave requests for ${user.name}:`, err);
@@ -879,6 +1126,8 @@ exports.generateAttendanceReportExcel = async (startDate, endDate, res, delivery
                     if (status === 'Half Day Present') totalPresent += 0.5;
 
                     const dateKey = moment(record.date).format('DD-MM-YYYY');
+                    const regularizationInfo = regularizedDates.get(dateKey);
+
                     return {
                     serialNo: index + 1,
                     date: moment(record.date).format('DD-MM-YYYY'),
@@ -887,8 +1136,9 @@ exports.generateAttendanceReportExcel = async (startDate, endDate, res, delivery
                     totalWorkingHours: record.totalWorkingHours || 'N/A',
                     status,
                     image: record.image || null,
-                    isRegularized: regularizedDates.has(dateKey) ? 'Yes' : 'No',
-                    approvedBy: regularizedDates.get(dateKey) || 'N/A',
+                    isRegularized: regularizationInfo ? 'Yes' : 'No',
+                    approvedBy: regularizationInfo?.approvedBy || 'N/A',
+                    regularizationStatus: regularizationInfo?.status || 'Not Applied'
                 };
             }),
             summary: { totalDays, totalPresent, totalLeaves, totalPaidDays },
@@ -980,7 +1230,7 @@ exports.generateAttendanceReportExcel = async (startDate, endDate, res, delivery
             };
 
             // Add Attendance Records Headers
-            const attendanceHeaders = ['Date', 'Image', 'Status', 'Punch In', 'Punch Out', 'Total Working Hours', 'Regularized', 'Approved By'];
+            const attendanceHeaders = ['Date', 'Image', 'Status', 'Punch In', 'Punch Out', 'Total Working Hours', 'Regularized', 'Approved By', 'RegularizationStatus'];
             const attendanceHeaderRow = worksheet.addRow(attendanceHeaders);
             attendanceHeaderRow.font = { bold: true, color: { argb: 'FFFFFF' } };
             attendanceHeaderRow.fill = {
@@ -1008,6 +1258,7 @@ exports.generateAttendanceReportExcel = async (startDate, endDate, res, delivery
                     record.totalWorkingHours,
                     record.isRegularized,
                     record.approvedBy,
+                    record.regularizationStatus,
                 ]);
             
                 if (record.image) {
@@ -1150,12 +1401,12 @@ exports.generateCurrentUserAttendanceHistoryPDF = async (req, res, userId) => {
         console.log(`Fetching attendance records for user ${userId} between ${startDate} and ${endDate}...`);
 
         // Fetch attendance records
-        const attendanceRecords = await this.getAttendanceByDateRange(userId.toString(), startDate, endDate).catch(
-            (err) => {
-                console.error('Error fetching attendance records:', err);
-                throw new Error('Failed to fetch attendance records');
-            }
-        );
+        const result = await this.getAttendanceByDateRange(userId._id.toString(), startDate, endDate).catch(err => {
+            console.error(`❌ Error fetching attendance for ${userId.name}:`, err);
+            return { attendance: [] };
+        });
+        const attendanceRecords = Array.isArray(result) ? result : result.attendance || [];
+        console.log(`✅ Total attendance records for ${userId.name}: ${attendanceRecords.length}`);    
 
         if (!attendanceRecords || attendanceRecords.length === 0) {
             console.warn(`No attendance records found for user ${userId}`);
@@ -1168,20 +1419,25 @@ exports.generateCurrentUserAttendanceHistoryPDF = async (req, res, userId) => {
             user: userId,
             startDate: { $lte: endDate },
             endDate: { $gte: startDate },
-            status: 'Approved',
+            // status: 'Approved',
         })
         .select('user startDate endDate status approvedBy')
         .lean();
 
         const regularizedDates = new Map();
-        regularizations.forEach(reg => {
-        const current = moment(reg.startDate);
-        const end = moment(reg.endDate);
-        while (current.isSameOrBefore(end)) {
-        regularizedDates.set(current.format('DD-MM-YYYY'), reg.approvedBy || 'N/A'); // Store approvedBy
-        current.add(1, 'days');
-    }
-});
+                regularizations.forEach(reg => {
+                    const current = moment(reg.startDate);
+                    const end = moment(reg.endDate);
+                    while (current.isSameOrBefore(end)) {
+                        const dateKey = current.format('DD-MM-YYYY');
+                        regularizedDates.set(dateKey, {
+                            approvedBy: reg.approvedBy || 'N/A',
+                            status: reg.status
+                        });
+                        current.add(1, 'days');
+                    }
+                });
+
         const totalDays = moment(endDate).diff(moment(startDate), 'days') + 1;
         let totalPresent = 0;
         let totalLeaves = 0;
@@ -1222,6 +1478,7 @@ exports.generateCurrentUserAttendanceHistoryPDF = async (req, res, userId) => {
                 totalPresent += 0.5;
             }
             const dateKey = moment(record.date).format('DD-MM-YYYY');
+            const regularizationInfo = regularizedDates.get(dateKey);
             // Return the formatted record
             return {
                 serialNo: index + 1,
@@ -1231,14 +1488,15 @@ exports.generateCurrentUserAttendanceHistoryPDF = async (req, res, userId) => {
                 punchOut: punchOutTime ? punchOutTime.format('hh:mm A') : 'N/A',
                 totalWorkingHours: totalWorkingHours, // Use formatted total working hours
                 status: attendanceStatus, // Attendance status based on criteria
-                attendanceRegularized: regularizedDates.has(dateKey) ? 'Yes' : 'No',
-                approvedBy: regularizedDates.get(dateKey) || 'N/A',
+                attendanceRegularized: regularizationInfo ? 'Yes' : 'No',
+                    approvedBy: regularizationInfo?.approvedBy || 'N/A',
+                    regularizationStatus: regularizationInfo?.status || 'Not Applied'
             };
         });
 
         try {
             leaveRequests = await leaveService.getLeaveRequests(userId, req.user?.role);
-            totalLeaves = leaveRequests.length;
+            totalLeaves = leaveRequests.data.length;
         } catch (err) {
             console.error(`Error fetching leave requests for user ${userId}:`, err);
         }
@@ -1343,7 +1601,12 @@ exports.generateCurrentUserAttendanceHistoryExcel = async (req, res, { deliveryM
         console.log(`Generating Excel for Current user: ${user.userId}`);
 
         // Fetch attendance records for the current user
-        const attendanceRecords = await this.getAttendanceByDateRange(user.userId, startDate, endDate);
+        const result = await this.getAttendanceByDateRange(user.userId.toString(), startDate, endDate).catch(err => {
+            console.error(`❌ Error fetching attendance for ${user.name}:`, err);
+            return { attendance: [] };
+        });
+        const attendanceRecords = Array.isArray(result) ? result : result.attendance || [];
+        console.log(`✅ Total attendance records for ${user.name}: ${attendanceRecords.length}`);     
 
         if (!attendanceRecords || attendanceRecords.length === 0) {
             return res.status(404).json({ message: 'No attendance records found' });
@@ -1354,21 +1617,25 @@ exports.generateCurrentUserAttendanceHistoryExcel = async (req, res, { deliveryM
             user: user.userId,
             startDate: { $lte: endDate },
             endDate: { $gte: startDate },
-            status: 'Approved'
+            // status: 'Approved'
         })
         .select('user startDate endDate status approvedBy')
         .lean();
 
         // Map regularization dates for quick lookup
         const regularizedDates = new Map();
-        regularizations.forEach(reg => {
-            const current = moment(reg.startDate);
-            const end = moment(reg.endDate);
-            while (current.isSameOrBefore(end)) {
-                regularizedDates.set(current.format('DD-MM-YYYY'), reg.approvedBy);
-                current.add(1, 'days');
-            }
-        });
+                regularizations.forEach(reg => {
+                    const current = moment(reg.startDate);
+                    const end = moment(reg.endDate);
+                    while (current.isSameOrBefore(end)) {
+                        const dateKey = current.format('DD-MM-YYYY');
+                        regularizedDates.set(dateKey, {
+                            approvedBy: reg.approvedBy || 'N/A',
+                            status: reg.status
+                        });
+                        current.add(1, 'days');
+                    }
+                });
 
         const totalDays = moment(endDate).diff(moment(startDate), 'days') + 1;
             let totalPresent = 0;
@@ -1376,8 +1643,8 @@ exports.generateCurrentUserAttendanceHistoryExcel = async (req, res, { deliveryM
             let totalPaidDays = 0;
 
             try {
-                const leaveRequests = await leaveService.getLeaveRequests(user._id, user.role);
-                totalLeaves = leaveRequests.length;
+                const leaveRequests = await leaveService.getLeaveRequests(user.userId, user.role);
+                totalLeaves = leaveRequests.data.length;
                 console.log(`\u2705 Processed leave data for ${user.name}: ${totalLeaves} leaves.`);
             } catch (err) {
                 console.error(`\u274c Error fetching leave requests for ${user.name}:`, err);
@@ -1424,6 +1691,8 @@ exports.generateCurrentUserAttendanceHistoryExcel = async (req, res, { deliveryM
                 if (status === 'Half Day Present') totalPresent += 0.5;
 
                 const dateKey = moment(record.date).format('DD-MM-YYYY');
+                const regularizationInfo = regularizedDates.get(dateKey);
+
                 return {
                 serialNo: index + 1,
                 date: moment(record.date).format('DD-MM-YYYY'),
@@ -1432,8 +1701,9 @@ exports.generateCurrentUserAttendanceHistoryExcel = async (req, res, { deliveryM
                 totalWorkingHours: record.totalWorkingHours || 'N/A',
                 status,
                 image: record.image || null, // Add image here if available
-                isRegularized: regularizedDates.has(dateKey) ? 'Yes' : 'No',
-                approvedBy: regularizedDates.get(dateKey) || 'N/A',
+                isRegularized: regularizationInfo ? 'Yes' : 'No',
+                approvedBy: regularizationInfo?.approvedBy || 'N/A',
+                regularizationStatus: regularizationInfo?.status || 'Not Applied'
             };
         }),
         summary: { totalDays, totalPresent, totalLeaves, totalPaidDays },
@@ -1504,7 +1774,7 @@ exports.generateCurrentUserAttendanceHistoryExcel = async (req, res, { deliveryM
         };
 
         // Add Attendance Records Headers
-        const attendanceHeaders = ['Date', 'Image', 'Status', 'Punch In', 'Punch Out', 'Total Working Hours', 'Regularized', 'Approved By'];
+        const attendanceHeaders = ['Date', 'Image', 'Status', 'Punch In', 'Punch Out', 'Total Working Hours', 'Regularized', 'Approved By', 'RegularizationStatus'];
         const attendanceHeaderRow = worksheet.addRow(attendanceHeaders);
         attendanceHeaderRow.font = { bold: true, color: { argb: 'FFFFFF' } };
         attendanceHeaderRow.fill = {
@@ -1527,6 +1797,7 @@ exports.generateCurrentUserAttendanceHistoryExcel = async (req, res, { deliveryM
                 record.totalWorkingHours,
                 record.isRegularized,
                 record.approvedBy,
+                record.regularizationStatus,
             ]);
 
             if (record.image) {
@@ -1641,22 +1912,16 @@ exports.generateUserAttendanceHistoryExcel = async (req, res, userId) => {
             return res.status(400).json({ message: 'Email is required when delivery method is "email"' });
         }
 
-        console.log('Fetching attendance records for date range...');
-        const attendanceRecords = await this.getAttendanceByDateRange(userId, startDate, endDate);
+        // console.log('Fetching attendance records for date range...');    
 
-        if (!attendanceRecords || attendanceRecords.length === 0) {
-            console.warn('No attendance records found for the specified date range.');
-            return res.status(404).json({ message: 'No attendance records found' });
-        }
-
-        console.log(`Attendance records fetched: ${attendanceRecords.length} entries found.`);
+        // console.log(`Attendance records fetched: ${attendanceRecords.length} entries found.`);
         console.log('Fetching approved regularizations...');
 
         const regularizations = await AttendanceRegularization.find({
             user: userId,
             startDate: { $lte: endDate },
             endDate: { $gte: startDate },
-            status: 'Approved',
+            // status: 'Approved',
         })
         .select('user startDate endDate status approvedBy')
         .lean();
@@ -1668,20 +1933,18 @@ exports.generateUserAttendanceHistoryExcel = async (req, res, userId) => {
         }
 
         const regularizedDates = new Map();
-        regularizations.forEach(reg => {
-            const key = `${reg.user}-${reg.startDate}-${reg.endDate}`;
-            if (!regularizedDates.has(key)) {
-                console.log(`Processing regularization from ${reg.startDate} to ${reg.endDate}`);
-                const current = moment(reg.startDate);
-                const end = moment(reg.endDate);
-                while (current.isSameOrBefore(end)) {
-                    const formattedDate = current.format('DD-MM-YYYY');
-                    regularizedDates.set(formattedDate, reg.approvedBy);
-                    console.log(`Regularized date added: ${formattedDate}`);
-                    current.add(1, 'days');
-                }
-            }
-        });
+                regularizations.forEach(reg => {
+                    const current = moment(reg.startDate);
+                    const end = moment(reg.endDate);
+                    while (current.isSameOrBefore(end)) {
+                        const dateKey = current.format('DD-MM-YYYY');
+                        regularizedDates.set(dateKey, {
+                            approvedBy: reg.approvedBy || 'N/A',
+                            status: reg.status
+                        });
+                        current.add(1, 'days');
+                    }
+                });
 
         const totalDays = moment(endDate).diff(moment(startDate), 'days') + 1;
             let totalPresent = 0;
@@ -1692,10 +1955,22 @@ exports.generateUserAttendanceHistoryExcel = async (req, res, userId) => {
             if (!user) {
                 return res.status(404).json({ message: 'User not found' });
             }
+            const result = await this.getAttendanceByDateRange(user._id.toString(), startDate, endDate).catch(err => {
+                console.error(`❌ Error fetching attendance for ${user.name}:`, err);
+                return { attendance: [] };
+            });
+            const attendanceRecords = Array.isArray(result) ? result : result.attendance || [];
+
+            if (!attendanceRecords || attendanceRecords.length === 0) {
+                console.warn('No attendance records found for the specified date range.');
+                return res.status(404).json({ message: 'No attendance records found' });
+            }
+            console.log(`✅ Total attendance records for ${user.name}: ${attendanceRecords.length}`);  
+
 
             try {
                 const leaveRequests = await leaveService.getLeaveRequests(user._id, user.role);
-                totalLeaves = leaveRequests.length;
+                totalLeaves = leaveRequests.data.length;
                 console.log(`\u2705 Processed leave data for ${user.name}: ${totalLeaves} leaves.`);
             } catch (err) {
                 console.error(`\u274c Error fetching leave requests for ${user.name}:`, err);
@@ -1713,7 +1988,7 @@ exports.generateUserAttendanceHistoryExcel = async (req, res, userId) => {
         titleRow.alignment = { horizontal: 'center' };
         titleRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '25325F' } };
 
-        const headers = ['Serial No.', 'Date', 'Image', 'Status', 'Punch In', 'Punch Out', 'Total Working Hours', 'Regularized', 'Approved By'];
+        const headers = ['Serial No.', 'Date', 'Image', 'Status', 'Punch In', 'Punch Out', 'Total Working Hours', 'Regularized', 'Approved By', 'RegularizationStatus'];
         const headerRow = worksheet.addRow(headers);
         headerRow.font = { bold: true, color: { argb: 'FFFFFF' } };
         headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F7A832' } };
@@ -1756,6 +2031,7 @@ exports.generateUserAttendanceHistoryExcel = async (req, res, userId) => {
                 record.totalWorkingHours || 'N/A',
                 regularizedDates.has(dateKey) ? 'Yes' : 'No',
                 regularizedDates.get(dateKey) || 'N/A',
+                record.regularizationStatus || 'Not Applied',
             ];
             
             // Add the row without the image column
@@ -1893,20 +2169,6 @@ exports.generateUserAttendanceHistoryPDF = async (req, res, userId) => {
         console.log('Formatted Start Date:', start);
         console.log('Formatted End Date:', end);
 
-        // Fetch attendance records using getAttendanceByDateRange method
-        const attendanceRecords = await this.getAttendanceByDateRange(userId.toString(), startDate, endDate)
-            .catch(err => {
-                console.error('Error fetching attendance records:', err);
-                return res.status(500).json({ message: 'Failed to fetch attendance records' });
-            });
-
-        // Log the fetched attendance records to see if data exists
-        console.log('Attendance Records:', attendanceRecords);
-
-        if (attendanceRecords.length === 0) {
-            return res.status(404).json({ message: 'No attendance records found' });
-        }
-
         // Fetch user details using the provided userId
         const user = await userService.getUserById(userId) // Call the user service function directly
             .catch(err => {
@@ -1921,24 +2183,41 @@ exports.generateUserAttendanceHistoryPDF = async (req, res, userId) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
+        const result = await this.getAttendanceByDateRange(user._id.toString(), startDate, endDate).catch(err => {
+            console.error(`❌ Error fetching attendance for ${user.name}:`, err);
+            return { attendance: [] };
+        });
+        const attendanceRecords = Array.isArray(result) ? result : result.attendance || [];
+
+        // Log the fetched attendance records to see if data exists
+        console.log('Attendance Records:', attendanceRecords);
+
+        if (attendanceRecords.length === 0) {
+            return res.status(404).json({ message: 'No attendance records found' });
+        }
+
         const regularizations = await AttendanceRegularization.find({
             user: user._id,
             startDate: { $lte: endDate },
             endDate: { $gte: startDate },
-            status: 'Approved',
+            // status: 'Approved',
         })
         .select('user startDate endDate status approvedBy')
         .lean();
 
         const regularizedDates = new Map();
-        regularizations.forEach(reg => {
-            const current = moment(reg.startDate);
-            const end = moment(reg.endDate);
-            while (current.isSameOrBefore(end)) {
-                regularizedDates.set(current.format('DD-MM-YYYY'), reg.approvedBy || 'N/A');
-                current.add(1, 'days');
-            }
-        });
+                regularizations.forEach(reg => {
+                    const current = moment(reg.startDate);
+                    const end = moment(reg.endDate);
+                    while (current.isSameOrBefore(end)) {
+                        const dateKey = current.format('DD-MM-YYYY');
+                        regularizedDates.set(dateKey, {
+                            approvedBy: reg.approvedBy || 'N/A',
+                            status: reg.status
+                        });
+                        current.add(1, 'days');
+                    }
+                });
 
         const totalDays = moment(endDate).diff(moment(startDate), 'days') + 1;
         let totalPresent = 0;
@@ -1980,6 +2259,7 @@ exports.generateUserAttendanceHistoryPDF = async (req, res, userId) => {
                 totalPresent += 0.5;
             }
             const dateKey = moment(record.date).format('DD-MM-YYYY');
+            const regularizationInfo = regularizedDates.get(dateKey);
             // Return the attendance record with additional calculated fields
             return {
                 serialNo: index + 1,
@@ -1989,8 +2269,9 @@ exports.generateUserAttendanceHistoryPDF = async (req, res, userId) => {
                 punchOut: punchOutTime ? punchOutTime.format('hh:mm A') : 'N/A',
                 totalWorkingHours: totalWorkingHours, // Keep the formatted total working hours
                 status: attendanceStatus, // Add status field (Present, Half Day, Absent)
-                attendanceRegularized: regularizedDates.has(dateKey) ? 'Yes' : 'No',
-                approvedBy: regularizedDates.get(dateKey) || 'N/A',
+                attendanceRegularized: regularizationInfo ? 'Yes' : 'No',
+                    approvedBy: regularizationInfo?.approvedBy || 'N/A',
+                    regularizationStatus: regularizationInfo?.status || 'Not Applied'
             };
         });           
 
@@ -1999,7 +2280,7 @@ exports.generateUserAttendanceHistoryPDF = async (req, res, userId) => {
 
         try {
             leaveRequests = await leaveService.getLeaveRequests(userId, req.user?.role);
-            totalLeaves = leaveRequests.length;
+            totalLeaves = leaveRequests.data.length;
         } catch (err) {
             console.error(`Error fetching leave requests for user ${userId}:`, err);
         }
@@ -2007,9 +2288,21 @@ exports.generateUserAttendanceHistoryPDF = async (req, res, userId) => {
         // Calculate total paid days
         totalPaidDays = totalPresent + totalLeaves;
 
+        let pendingApprovals = 0;
+        try {
+            pendingApprovals = await Leave.countDocuments({
+                employeeId: userId,
+                status: 'Pending'
+            });
+        } catch (err) {
+            console.error(`Error fetching pending leave approvals for user ${userId}:`, err);
+        }
+
+
         const reportData = {
             startDate: moment(startDate).format('MMMM Do, YYYY'),
             endDate: moment(endDate).format('MMMM Do, YYYY'),
+            isDetailedReport: true,
             users: [{
                 name: user.name || 'Unknown',
                 email: user.email || 'Unknown',
@@ -2021,6 +2314,7 @@ exports.generateUserAttendanceHistoryPDF = async (req, res, userId) => {
                     totalPresent,
                     totalLeaves,
                     totalPaidDays,
+                    pendingApprovals
                 },
             }],
         };
@@ -2100,31 +2394,44 @@ exports.generateUserTagsAttendanceHistoryPDF = async (req, res, userTags) => {
 
         const users = await User.find({
             UserTags: { $in: userTags.map(tag => tag.trim()) }
-        });
+        }).lean();
+
+        const usersWithId = users.filter(u => !!u.employeeId)
+    .sort((a, b) => parseInt(a.employeeId) - parseInt(b.employeeId));
+    const usersWithoutId = users.filter(u => !u.employeeId);
+    const sortedUsers  = [...usersWithId, ...usersWithoutId];
 
         if (!users.length) {
             return res.status(404).json({ message: 'No users found for the given tags' });
         }
 
-        const usersData = await Promise.all(users.map(async (user) => {
-            const attendanceRecords = await this.getAttendanceByDateRange(user._id.toString(), startDate, endDate).catch(() => []);
+        const usersData = await Promise.all(sortedUsers.map(async (user) => {
+            const result = await this.getAttendanceByDateRange(user._id.toString(), startDate, endDate).catch(err => {
+                console.error(`❌ Error fetching attendance for ${user.name}:`, err);
+                return { attendance: [] };
+            });
+            const attendanceRecords = Array.isArray(result) ? result : result.attendance || [];
 
             const regularizations = await AttendanceRegularization.find({
                 user: user._id,
                 startDate: { $lte: endDate },
                 endDate: { $gte: startDate },
-                status: 'Approved',
+                // status: 'Approved',
             }).select('startDate endDate approvedBy').lean();
 
             const regularizedDates = new Map();
-            regularizations.forEach(reg => {
-                let current = moment(reg.startDate);
-                let end = moment(reg.endDate);
-                while (current.isSameOrBefore(end)) {
-                    regularizedDates.set(current.format('DD-MM-YYYY'), reg.approvedBy);
-                    current.add(1, 'days');
-                }
-            });
+                regularizations.forEach(reg => {
+                    const current = moment(reg.startDate);
+                    const end = moment(reg.endDate);
+                    while (current.isSameOrBefore(end)) {
+                        const dateKey = current.format('DD-MM-YYYY');
+                        regularizedDates.set(dateKey, {
+                            approvedBy: reg.approvedBy || 'N/A',
+                            status: reg.status
+                        });
+                        current.add(1, 'days');
+                    }
+                });
 
             let totalDays = moment(endDate).diff(moment(startDate), 'days') + 1;
             let totalPresent = 0;
@@ -2163,6 +2470,7 @@ exports.generateUserTagsAttendanceHistoryPDF = async (req, res, userTags) => {
                 else if (status === 'Half Day Present') totalPresent += 0.5;
 
                 const dateKey = moment(record.date).format('DD-MM-YYYY');
+                const regularizationInfo = regularizedDates.get(dateKey);
                 if (regularizedDates.has(dateKey)) {
                     status = 'Regularized';
                     totalWorkingHours = '8 Hours';
@@ -2176,14 +2484,15 @@ exports.generateUserTagsAttendanceHistoryPDF = async (req, res, userTags) => {
                     punchOut: punchOut ? punchOut.format('hh:mm A') : 'N/A',
                     totalWorkingHours,
                     status,
-                    attendanceRegularized: regularizedDates.has(dateKey) ? 'Yes' : 'No',
-                    approvedBy: regularizedDates.get(dateKey) || 'N/A',
+                    attendanceRegularized: regularizationInfo ? 'Yes' : 'No',
+                    approvedBy: regularizationInfo?.approvedBy || 'N/A',
+                    regularizationStatus: regularizationInfo?.status || 'Not Applied'
                 };
             });
 
             try {
                 const leaveRequests = await leaveService.getLeaveRequests(user._id, req.user?.role);
-                totalLeaves = leaveRequests.length;
+                totalLeaves = leaveRequests.data.length;
             } catch (err) {
                 console.error(`Error fetching leave requests for user ${user._id}:`, err);
             }
@@ -2267,6 +2576,11 @@ exports.generateUserTagsAttendanceHistoryExcel = async (req, res, userTags) => {
 
         const users = await User.find({ UserTags: { $in: userTags.map(tag => tag.trim()) } }).lean();
 
+        const usersWithId = users.filter(u => !!u.employeeId)
+        .sort((a, b) => parseInt(a.employeeId) - parseInt(b.employeeId));
+        const usersWithoutId = users.filter(u => !u.employeeId);
+        const sortedUsers = [...usersWithId, ...usersWithoutId];
+
         if (!users.length) {
             return res.status(404).json({ message: 'No users found for the given tags' });
         }
@@ -2277,15 +2591,40 @@ exports.generateUserTagsAttendanceHistoryExcel = async (req, res, userTags) => {
         workbook.creator = 'VRSIIS HRM';
         workbook.created = new Date();
 
-        for (const user of users) {
+        for (const user of sortedUsers) {
             console.log(`Processing user: ${user.name}`);
 
-            const attendanceRecords = await this.getAttendanceByDateRange(user._id.toString(), startDate, endDate).catch(() => []);
+            const result = await this.getAttendanceByDateRange(user._id.toString(), startDate, endDate).catch(err => {
+                console.error(`❌ Error fetching attendance for ${user.name}:`, err);
+                return { attendance: [] };
+            });
+            const attendanceRecords = Array.isArray(result) ? result : result.attendance || [];
+            console.log(`✅ Total attendance records for ${user.name}: ${attendanceRecords.length}`);  
 
             if (!attendanceRecords.length) {
                 console.log(`No attendance records for ${user.name}`);
                 continue;
             }
+
+            const regularizations = await AttendanceRegularization.find({
+                user: user._id,
+                startDate: { $lte: endDate },
+                endDate: { $gte: startDate },
+            }).select('startDate endDate approvedBy status').lean();
+            
+            const regularizedDates = new Map();
+            regularizations.forEach(reg => {
+                const current = moment(reg.startDate);
+                const end = moment(reg.endDate);
+                while (current.isSameOrBefore(end)) {
+                    const dateKey = current.format('DD-MM-YYYY');
+                    regularizedDates.set(dateKey, {
+                        approvedBy: reg.approvedBy || 'N/A',
+                        status: reg.status || 'N/A'
+                    });
+                    current.add(1, 'days');
+                }
+            });            
 
             let totalPresent = 0;
             let totalLeaves = 0;
@@ -2308,7 +2647,8 @@ exports.generateUserTagsAttendanceHistoryExcel = async (req, res, userTags) => {
                 'Total Working Hours',
                 'Status',
                 'Regularized',
-                'Approved By'
+                'Approved By',
+                'Regularization Status'
             ]);
             headerRow.font = { bold: true, color: { argb: 'FFFFFF' } };
             headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F7A832' } };
@@ -2326,6 +2666,7 @@ exports.generateUserTagsAttendanceHistoryExcel = async (req, res, userTags) => {
                 { header: 'Status', key: 'status', width: 15 },
                 { header: 'User Tag Attendance History', key: 'attendanceRegularized', width: 15 },
                 { header: '', key: 'approvedBy', width: 20 },
+                { header: 'Regularization Status', key: 'regularizationStatus', width: 20 },
             ];
 
             attendanceRecords.forEach((record, index) => {
@@ -2350,6 +2691,9 @@ exports.generateUserTagsAttendanceHistoryExcel = async (req, res, userTags) => {
                 if (status === 'Present') totalPresent += 1;
                 if (status === 'Half Day Present') totalPresent += 0.5;
 
+                const dateKey = moment(record.date).format('DD-MM-YYYY');
+                const regularizationInfo = regularizedDates.get(dateKey);
+
                 const row = worksheet.addRow({
                     serialNo: index + 1,
                     date: moment(record.date).format('DD-MM-YYYY'),
@@ -2358,8 +2702,9 @@ exports.generateUserTagsAttendanceHistoryExcel = async (req, res, userTags) => {
                     punchOut: punchOut ? punchOut.format('hh:mm A') : 'N/A',
                     totalWorkingHours,
                     status,
-                    attendanceRegularized: record.attendanceRegularized ? 'Yes' : 'No',
-                    approvedBy: record.approvedBy || 'N/A',
+                    attendanceRegularized: regularizationInfo ? 'Yes' : 'No',
+                    approvedBy: regularizationInfo?.approvedBy || 'N/A',
+                    regularizationStatus: regularizationInfo?.status || 'Not Applied'
                 });
 
                 const currentRowIndex = row.number;
@@ -2386,7 +2731,7 @@ exports.generateUserTagsAttendanceHistoryExcel = async (req, res, userTags) => {
 
             try {
                 const leaveRequests = await leaveService.getLeaveRequests(user._id, user.role);
-                totalLeaves = leaveRequests.length;
+                totalLeaves = leaveRequests.data.length;
             } catch (err) {
                 console.error(`Error fetching leave requests for ${user.name}:`, err);
             }
@@ -2457,7 +2802,11 @@ exports.generateAttendanceReportByPlaza = async (startDate, endDate, plazaName, 
         }
 
         const userIds = [...new Set(attendanceRecords.map(record => record.userId))];
-        const users = await User.find({ _id: { $in: userIds } }).sort({ _id: 1 });
+        const users = await User.find({ _id: { $in: userIds } }).sort({ _id: 1 }).lean();
+        const usersWithId = users.filter(u => !!u.employeeId)
+        .sort((a, b) => parseInt(a.employeeId) - parseInt(b.employeeId));
+        const usersWithoutId = users.filter(u => !u.employeeId);
+        const sortedUsers = [...usersWithId, ...usersWithoutId];
         let serialCounter = 1;
         let totalDays = moment(endDate).diff(moment(startDate), 'days') + 1;
         let totalPresent = 0;
@@ -2468,31 +2817,38 @@ exports.generateAttendanceReportByPlaza = async (startDate, endDate, plazaName, 
 
         console.log(`🔍 Processing ${users.length} users and ${attendanceRecords.length} attendance records...`);
         const processedUsers = await Promise.all(
-            users.map(async (user) => {
+            sortedUsers.map(async (user) => {
                 const records = attendanceRecords.filter(record => record.userId.toString() === user._id.toString());
 
                 const regularizations = await AttendanceRegularization.find({
                     user: user._id,
                     startDate: { $lte: endDate },
                     endDate: { $gte: startDate },
-                    status: 'Approved',
-                }).select('startDate endDate approvedBy').lean();
+                    // status: 'Approved',
+                }).select('startDate endDate approvedBy status').lean();
 
                 const regularizedDates = new Map();
-                regularizations.forEach(reg => {
-                    let current = moment(reg.startDate);
-                    let end = moment(reg.endDate);
-                    while (current.isSameOrBefore(end)) {
-                        regularizedDates.set(current.format('DD-MM-YYYY'), reg.approvedBy);
-                        current.add(1, 'days');
-                    }
-                });
+regularizations.forEach(reg => {
+    const current = moment(reg.startDate);
+    const end = moment(reg.endDate);
+    while (current.isSameOrBefore(end)) {
+        const dateKey = current.format('DD-MM-YYYY');
+        regularizedDates.set(dateKey, {
+            approvedBy: reg.approvedBy || 'N/A',
+            status: reg.status || 'Pending'  // << store the status explicitly
+        });
+        current.add(1, 'days');
+    }
+});
 
                 const attendanceData = records.map(record => {
                     const formattedDate = moment(record.date).format('DD-MM-YYYY');
                     const status = 'Present';
-                    const regularized = regularizedDates.has(formattedDate) ? 'Yes' : 'No';
-                    const approvedBy = regularizedDates.get(formattedDate) || 'N/A';
+                    const regularizationInfo = regularizedDates.get(formattedDate);
+                    const regularized = regularizationInfo ? 'Yes' : 'No';
+                    const approvedBy = regularizationInfo?.approvedBy || 'N/A';
+                    const regularizationStatus = regularizationInfo?.status || 'Not Applied';
+
 
                     let totalWorkingHours = 'No working hours';
                     if (record.punchIn) {
@@ -2528,13 +2884,14 @@ exports.generateAttendanceReportByPlaza = async (startDate, endDate, plazaName, 
                         totalWorkingHours,
                         status,
                         attendanceRegularized: regularized,
-                        approvedBy: approvedBy
+                        approvedBy: approvedBy,
+                        regularizationStatus
                     };
                 });
 
                 try {
                     const leaveRequests = await leaveService.getLeaveRequests(user._id, req.user?.role);
-                    totalLeaves = leaveRequests.length;
+                    totalLeaves = leaveRequests.data.length;
                 } catch (err) {
                     console.error(`Error fetching leave requests for user ${user._id}:`, err);
                 }
@@ -2635,17 +2992,41 @@ exports.generatePlazaAttendanceHistoryExcel = async (req, res) => {
         }
 
         const userIds = [...new Set(attendanceRecords.map(record => record.userId))];
-        const users = await User.find({ _id: { $in: userIds } }).sort({ _id: 1 });
+        const users = await User.find({ _id: { $in: userIds } }).sort({ _id: 1 }).lean();
+        const usersWithId = users.filter(u => !!u.employeeId)
+        .sort((a, b) => parseInt(a.employeeId) - parseInt(b.employeeId));
+        const usersWithoutId = users.filter(u => !u.employeeId);
+        const sortedUsers = [...usersWithId, ...usersWithoutId];
 
         const workbook = new ExcelJS.Workbook();
         workbook.creator = 'VRSIIS HRM';
         workbook.created = new Date();
 
-        for (const user of users) {
+        for (const user of sortedUsers) {
             console.log(`Processing user: ${user.name}`);
 
             const userAttendance = attendanceRecords.filter(record => record.userId.toString() === user._id.toString());
             if (!userAttendance.length) continue;
+
+            const regularizations = await AttendanceRegularization.find({
+                user: user._id,
+                startDate: { $lte: endDate },
+                endDate: { $gte: startDate },
+            }).select('startDate endDate approvedBy status').lean();
+
+            const regularizedDates = new Map();
+            regularizations.forEach(reg => {
+                const current = moment(reg.startDate);
+                const end = moment(reg.endDate);
+                while (current.isSameOrBefore(end)) {
+                    const dateKey = current.format('DD-MM-YYYY');
+                    regularizedDates.set(dateKey, {
+                        approvedBy: reg.approvedBy || 'N/A',
+                        status: reg.status || 'N/A'
+                    });
+                    current.add(1, 'days');
+                }
+            });
 
             let totalPresent = 0, totalLeaves = 0, totalPaidDays = 0;
 
@@ -2670,7 +3051,8 @@ exports.generatePlazaAttendanceHistoryExcel = async (req, res) => {
                 'Total Working Hours',
                 'Status',
                 'Regularized',
-                'Approved By'
+                'Approved By',
+                'Regularization Status'
             ];
 
             worksheet.addRow(columnHeaders).eachCell(cell => {
@@ -2689,6 +3071,7 @@ exports.generatePlazaAttendanceHistoryExcel = async (req, res) => {
                 { key: 'status', width: 15 },
                 { key: 'attendanceRegularized', width: 15 },
                 { key: 'approvedBy', width: 20 },
+                { key: 'regularizationStatus', width: 15 }
             ];
 
             for (const [index, record] of userAttendance.entries()) {
@@ -2720,6 +3103,9 @@ exports.generatePlazaAttendanceHistoryExcel = async (req, res) => {
 
                 if (status === 'Present') totalPresent++;
 
+                const dateKey = moment(record.date).format('DD-MM-YYYY');
+                const regInfo = regularizedDates.get(dateKey);
+
                 const row = worksheet.addRow({
                     serialNo: index + 1,
                     date: moment(record.date).format('DD-MM-YYYY'),
@@ -2728,62 +3114,40 @@ exports.generatePlazaAttendanceHistoryExcel = async (req, res) => {
                     punchOut: punchOut ? punchOut.format('hh:mm A') : 'N/A',
                     totalWorkingHours,
                     status,
-                    attendanceRegularized: record.attendanceRegularized ? 'Yes' : 'No',
-                    approvedBy: record.approvedBy || 'N/A',
+                    attendanceRegularized: regInfo ? 'Yes' : 'No',
+                    approvedBy: regInfo?.approvedBy || 'N/A',
+                    regularizationStatus: regInfo?.status || 'Not Applied'
                 });
 
                 const currentRowIndex = row.number;
+                const base64 = record.imageBase64 || record.image;
 
-                if (record.imageBase64) {
-                    console.log(`🖼️ Image found for user: ${user.name}, Record Date: ${moment(record.date).format('DD-MM-YYYY')}`);
-                    console.log(`📝 Image Base64 Length: ${record.imageBase64.length}`);
-                
+                if (base64) {
                     try {
-                        let base64Data = record.imageBase64;
-                
-                        // ✅ Add prefix if missing
-                        if (!base64Data.startsWith('data:image/')) {
-                            base64Data = `data:image/jpeg;base64,${base64Data}`;
+                        let formatted = base64;
+                        if (!base64.startsWith('data:image/')) {
+                            formatted = `data:image/jpeg;base64,${base64}`;
                         }
-                
-                        // ✅ Extract base64 without prefix
-                        const base64WithoutPrefix = base64Data.replace(/^data:image\/\w+;base64,/, '');
-                        const imageBuffer = Buffer.from(base64WithoutPrefix, 'base64');
-                        console.log(`✅ Image buffer created. Buffer length: ${imageBuffer.length}`);
-                
-                        // ✅ Dynamic extension handling
-                        const extension = base64Data.includes('image/png') ? 'png' : 'jpeg';
-                
-                        const imageId = workbook.addImage({
-                            buffer: imageBuffer,
-                            extension: extension,
-                        });
-                
-                        if (imageId) {
-                            console.log(`🆔 Image ID generated successfully: ${imageId}`);
-                        } else {
-                            console.warn(`⚠️ Failed to generate image ID for user: ${user.name}`);
-                        }
-                
+                        const data = formatted.replace(/^data:image\/\w+;base64,/, '');
+                        const buffer = Buffer.from(data, 'base64');
+                        const ext = formatted.includes('image/png') ? 'png' : 'jpeg';
+                        const imageId = workbook.addImage({ buffer, extension: ext });
+
                         worksheet.getRow(currentRowIndex).height = 80;
                         worksheet.getColumn(3).width = 25;
                         worksheet.addImage(imageId, {
                             tl: { col: 2, row: currentRowIndex - 1 },
                             ext: { width: 100, height: 80 },
-                            editAs: 'oneCell',
+                            editAs: 'oneCell'
                         });
-                
-                        console.log(`✅ Image added successfully for user: ${user.name} at row: ${currentRowIndex}`);
                     } catch (imgErr) {
                         console.error(`❌ Error processing image for user: ${user.name}`, imgErr);
                     }
-                } else {
-                    console.log(`🚫 No image found for user: ${user.name}, Record Date: ${moment(record.date).format('DD-MM-YYYY')}`);
-                }                                       
+                }
             }
 
             const leaveRequests = await leaveService.getLeaveRequests(user._id, req.user?.role);
-            totalLeaves = leaveRequests.length;
+            totalLeaves = leaveRequests.data.length;
             totalPaidDays = totalPresent + totalLeaves;
 
             worksheet.addRow([]);
@@ -2839,6 +3203,10 @@ exports.generateAllUsersAttendanceSummaryPDF = async (startDate, endDate, req, r
 
         console.log('📌 Fetching users...');
         const users = await User.find({}).lean();
+        const usersWithId = users.filter(u => !!u.employeeId)
+        .sort((a, b) => parseInt(a.employeeId) - parseInt(b.employeeId));
+        const usersWithoutId = users.filter(u => !u.employeeId);
+        const sortedUsers = [...usersWithId, ...usersWithoutId];
         console.log(`✅ Total users found: ${users.length}`);
 
         if (!users.length) {
@@ -2859,7 +3227,7 @@ exports.generateAllUsersAttendanceSummaryPDF = async (startDate, endDate, req, r
         const template = handlebars.compile(templateSource);
 
         console.log('🛠 Processing users data for the summary report...');
-        const usersSummaryData = await Promise.all(users.map(async (user) => {
+        const usersSummaryData = await Promise.all(sortedUsers.map(async (user) => {
             const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
             const regularizations = await AttendanceRegularization.find({
                 user: user._id,
@@ -2883,6 +3251,18 @@ exports.generateAllUsersAttendanceSummaryPDF = async (startDate, endDate, req, r
             const compliance = totalDays ? ((presentDays / totalDays) * 100).toFixed(2) : 0;
             const totalRegularizations = regularizations.length;
 
+            let pendingLeaves = 0;
+            try {
+                pendingLeaves = await Leave.countDocuments({
+                    employeeId: user._id,
+                    status: 'Pending'
+                });
+            } catch (leaveError) {
+                console.error(`❌ Error fetching pending leaves for ${user.name || user._id}:`, leaveError);
+                pendingLeaves = 0; // fallback to 0 to not break PDF generation
+            }
+           
+
             return {
                 name: user.name,
                 fatherName: user.fatherName || 'N/A',
@@ -2897,7 +3277,8 @@ exports.generateAllUsersAttendanceSummaryPDF = async (startDate, endDate, req, r
                 totalWorkingHours: totalWorkingHours.toFixed(2),
                 averageWorkingHours,
                 regularizations: totalRegularizations,
-                compliance
+                compliance,
+                pendingLeaves
             };
         }));
 
@@ -2963,6 +3344,10 @@ exports.generateAllUsersAttendanceSummaryExcel = async (startDate, endDate, req,
 
         console.log('📌 Fetching users...');
         const users = await User.find({}).lean();
+        const usersWithId = users.filter(u => !!u.employeeId)
+        .sort((a, b) => parseInt(a.employeeId) - parseInt(b.employeeId));
+        const usersWithoutId = users.filter(u => !u.employeeId);
+        const sortedUsers = [...usersWithId, ...usersWithoutId];
         console.log(`✅ Total users found: ${users.length}`);
 
         if (!users.length) {
@@ -2971,7 +3356,7 @@ exports.generateAllUsersAttendanceSummaryExcel = async (startDate, endDate, req,
         }
 
         console.log('🛠 Processing users data for the summary report...');
-        const usersSummaryData = await Promise.all(users.map(async (user) => {
+        const usersSummaryData = await Promise.all(sortedUsers.map(async (user) => {
             const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
             const regularizations = await AttendanceRegularization.find({
                 user: user._id,
@@ -2995,6 +3380,11 @@ exports.generateAllUsersAttendanceSummaryExcel = async (startDate, endDate, req,
             const compliance = totalDays ? ((presentDays / totalDays) * 100).toFixed(2) : 0;
             const totalRegularizations = regularizations.length;
 
+            pendingLeaves = await Leave.countDocuments({
+                employeeId: user._id,
+                status: 'Pending'
+            });            
+
             return {
                 name: user.name,
                 fatherName: user.fatherName || 'N/A',
@@ -3009,7 +3399,8 @@ exports.generateAllUsersAttendanceSummaryExcel = async (startDate, endDate, req,
                 totalWorkingHours: totalWorkingHours.toFixed(2),
                 averageWorkingHours,
                 regularizations: totalRegularizations,
-                compliance
+                compliance,
+                pendingLeaves
             };
         }));
 
@@ -3031,7 +3422,8 @@ exports.generateAllUsersAttendanceSummaryExcel = async (startDate, endDate, req,
             { header: 'TOTAL WORKING HOURS', key: 'totalWorkingHours' },
             { header: 'AVERAGE WORKING HOURS/DAY', key: 'averageWorkingHours' },
             { header: 'REGULARIZATIONS', key: 'regularizations' },
-            { header: 'ATTENDANCE COMPLIANCE (%)', key: 'compliance' }
+            { header: 'ATTENDANCE COMPLIANCE (%)', key: 'compliance' },
+            { header: 'PENDING LEAVES', key: 'pendingLeaves' }
         ];
 
         worksheet.getRow(1).eachCell(cell => {
@@ -3092,6 +3484,10 @@ exports.generateUserTagsAttendanceSummaryPDF = async (req, res, userTags) => {
         const users = await User.find({
             UserTags: { $in: userTags.map(tag => tag.trim()) }
         }).lean();
+        const usersWithId = users.filter(u => !!u.employeeId)
+        .sort((a, b) => parseInt(a.employeeId) - parseInt(b.employeeId));
+        const usersWithoutId = users.filter(u => !u.employeeId);
+        const sortedUsers = [...usersWithId, ...usersWithoutId];
 
         console.log(`✅ Total users found: ${users.length}`);
         if (!users.length) {
@@ -3099,7 +3495,7 @@ exports.generateUserTagsAttendanceSummaryPDF = async (req, res, userTags) => {
         }
 
         console.log('🛠 Processing users data for the summary report...');
-        const usersSummaryData = await Promise.all(users.map(async (user) => {
+        const usersSummaryData = await Promise.all(sortedUsers.map(async (user) => {
             const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate) || [];
             const regularizations = await AttendanceRegularization.find({
                 user: user._id,
@@ -3124,6 +3520,17 @@ exports.generateUserTagsAttendanceSummaryPDF = async (req, res, userTags) => {
             const averageWorkingHours = presentDays ? (totalWorkingHours / presentDays).toFixed(2) : "NaN";
             const compliance = totalDays ? ((presentDays / totalDays) * 100).toFixed(2) : "NaN";
 
+            let pendingLeaves = 0;
+            try {
+                pendingLeaves = await Leave.countDocuments({
+                    employeeId: user._id,
+                    status: 'Pending'
+                });
+            } catch (leaveError) {
+                console.error(`❌ Error fetching pending leaves for ${user.name || user._id}:`, leaveError);
+                pendingLeaves = 0; // fallback to 0 to not break PDF generation
+            }
+
             return {
                 name: user.name || "NaN",
                 fatherName: user.fatherName || "NaN",
@@ -3137,7 +3544,8 @@ exports.generateUserTagsAttendanceSummaryPDF = async (req, res, userTags) => {
                 totalWorkingHours: totalWorkingHours ? totalWorkingHours.toFixed(2) : "NaN",
                 averageWorkingHours,
                 regularizations: totalRegularizations || "NaN",
-                compliance
+                compliance,
+                pendingLeaves
             };
         }));
 
@@ -3205,6 +3613,10 @@ exports.generateUserTagsAttendanceSummaryExcel = async (req, res, userTags) => {
         const users = await User.find({
             UserTags: { $in: userTags.map(tag => tag.trim()) }
         }).lean();
+        const usersWithId = users.filter(u => !!u.employeeId)
+        .sort((a, b) => parseInt(a.employeeId) - parseInt(b.employeeId));
+        const usersWithoutId = users.filter(u => !u.employeeId);
+        const sortedUsers = [...usersWithId, ...usersWithoutId];
 
         console.log(`✅ Total users found: ${users.length}`);
         if (!users.length) {
@@ -3212,7 +3624,7 @@ exports.generateUserTagsAttendanceSummaryExcel = async (req, res, userTags) => {
         }
 
         console.log('🛠 Processing users data for the summary report...');
-        const usersSummaryData = await Promise.all(users.map(async (user) => {
+        const usersSummaryData = await Promise.all(sortedUsers.map(async (user) => {
             const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate) || [];
             const regularizations = await AttendanceRegularization.find({
                 user: user._id,
@@ -3237,6 +3649,17 @@ exports.generateUserTagsAttendanceSummaryExcel = async (req, res, userTags) => {
             const averageWorkingHours = presentDays ? (totalWorkingHours / presentDays).toFixed(2) : "NaN";
             const compliance = totalDays ? ((presentDays / totalDays) * 100).toFixed(2) : "NaN";
 
+            let pendingLeaves = 0;
+            try {
+                pendingLeaves = await Leave.countDocuments({
+                    employeeId: user._id,
+                    status: 'Pending'
+                });
+            } catch (leaveError) {
+                console.error(`❌ Error fetching pending leaves for ${user.name || user._id}:`, leaveError);
+                pendingLeaves = 0; // fallback to 0 to not break PDF generation
+            }
+
             return {
                 name: user.name || "NaN",
                 fatherName: user.fatherName || "NaN",
@@ -3250,7 +3673,8 @@ exports.generateUserTagsAttendanceSummaryExcel = async (req, res, userTags) => {
                 totalWorkingHours: totalWorkingHours ? totalWorkingHours.toFixed(2) : "NaN",
                 averageWorkingHours,
                 regularizations: totalRegularizations || "NaN",
-                compliance
+                compliance,
+                pendingLeaves
             };
         }));
 
@@ -3271,7 +3695,8 @@ exports.generateUserTagsAttendanceSummaryExcel = async (req, res, userTags) => {
             { header: 'Total Working Hours', key: 'totalWorkingHours', width: 18 },
             { header: 'Average Working Hours', key: 'averageWorkingHours', width: 20 },
             { header: 'Regularizations', key: 'regularizations', width: 15 },
-            { header: 'Compliance (%)', key: 'compliance', width: 15 }
+            { header: 'Compliance (%)', key: 'compliance', width: 15 },
+            { header: 'PENDING LEAVES', key: 'pendingLeaves', width: 15 }
         ];
 
         worksheet.getRow(1).eachCell(cell => {
@@ -3346,9 +3771,12 @@ exports.generateAttendanceReportSummaryByPlaza = async (startDate, endDate, plaz
         }
 
         const userIds = [...new Set(attendanceRecords.map(record => record.userId))];
-        const users = await User.find({ _id: { $in: userIds } }).sort({ _id: 1 });
-
-        const usersSummaryData = await Promise.all(users.map(async (user) => {
+        const users = await User.find({ _id: { $in: userIds } }).sort({ _id: 1 }).lean();
+        const usersWithId = users.filter(u => !!u.employeeId)
+        .sort((a, b) => parseInt(a.employeeId) - parseInt(b.employeeId));
+        const usersWithoutId = users.filter(u => !u.employeeId);
+        const sortedUsers = [...usersWithId, ...usersWithoutId];
+        const usersSummaryData = await Promise.all(sortedUsers.map(async (user) => {
             const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
             const regularizations = await AttendanceRegularization.find({
                 user: user._id,
@@ -3372,6 +3800,17 @@ exports.generateAttendanceReportSummaryByPlaza = async (startDate, endDate, plaz
             const compliance = totalDays ? ((presentDays / totalDays) * 100).toFixed(2) : 0;
             const totalRegularizations = regularizations.length;
 
+            let pendingLeaves = 0;
+            try {
+                pendingLeaves = await Leave.countDocuments({
+                    employeeId: user._id,
+                    status: 'Pending'
+                });
+            } catch (leaveError) {
+                console.error(`❌ Error fetching pending leaves for ${user.name || user._id}:`, leaveError);
+                pendingLeaves = 0;
+            }
+
             return {
                 name: user.name,
                 fatherName: user.fatherName || 'N/A',
@@ -3386,7 +3825,8 @@ exports.generateAttendanceReportSummaryByPlaza = async (startDate, endDate, plaz
                 totalWorkingHours: totalWorkingHours.toFixed(2),
                 averageWorkingHours,
                 regularizations: totalRegularizations,
-                compliance
+                compliance,
+                pendingLeaves
             };
         }));
 
@@ -3452,7 +3892,11 @@ exports.generateAttendanceReportSummaryByPlazaExcel = async (startDate, endDate,
         }
 
         const userIds = [...new Set(attendanceRecords.map(record => record.userId))];
-        const users = await User.find({ _id: { $in: userIds } }).sort({ _id: 1 });
+        const users = await User.find({ _id: { $in: userIds } }).sort({ _id: 1 }).lean();
+        const usersWithId = users.filter(u => !!u.employeeId)
+        .sort((a, b) => parseInt(a.employeeId) - parseInt(b.employeeId));
+        const usersWithoutId = users.filter(u => !u.employeeId);
+        const sortedUsers = [...usersWithId, ...usersWithoutId];
 
         const workbook = new ExcelJS.Workbook();
         const worksheet = workbook.addWorksheet('Attendance Summary');
@@ -3471,7 +3915,8 @@ exports.generateAttendanceReportSummaryByPlazaExcel = async (startDate, endDate,
             { header: 'Total Working Hours', key: 'totalWorkingHours', width: 20 },
             { header: 'Average Working Hours', key: 'averageWorkingHours', width: 22 },
             { header: 'Regularizations', key: 'regularizations', width: 15 },
-            { header: 'Compliance (%)', key: 'compliance', width: 15 }
+            { header: 'Compliance (%)', key: 'compliance', width: 15 },
+            { header: 'PENDING LEAVES', key: 'pendingLeaves', width: 15 }
         ];
 
         worksheet.getRow(1).eachCell(cell => {
@@ -3483,7 +3928,7 @@ exports.generateAttendanceReportSummaryByPlazaExcel = async (startDate, endDate,
             cell.font = { color: { argb: 'F7A832' }, bold: true };
         });
 
-        for (const user of users) {
+        for (const user of sortedUsers) {
             const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
             const totalDays = attendanceRecords.length;
             const presentDays = attendanceRecords.filter(r => r.present === 'Yes' || r.present === 'Attendance Regularized').length;
@@ -3495,6 +3940,17 @@ exports.generateAttendanceReportSummaryByPlazaExcel = async (startDate, endDate,
                 }
                 return acc;
             }, 0);
+
+            let pendingLeaves = 0;
+            try {
+                pendingLeaves = await Leave.countDocuments({
+                    employeeId: user._id,
+                    status: 'Pending'
+                });
+            } catch (leaveError) {
+                console.error(`❌ Error fetching pending leaves for ${user.name || user._id}:`, leaveError);
+                pendingLeaves = 0; // fallback to 0 to not break PDF generation
+            }
 
             worksheet.addRow({
                 name: user.name,
@@ -3510,7 +3966,8 @@ exports.generateAttendanceReportSummaryByPlazaExcel = async (startDate, endDate,
                 totalWorkingHours: totalWorkingHours.toFixed(2),
                 averageWorkingHours: presentDays ? (totalWorkingHours / presentDays).toFixed(2) : 0,
                 regularizations: 0,
-                compliance: totalDays ? ((presentDays / totalDays) * 100).toFixed(2) : 0
+                compliance: totalDays ? ((presentDays / totalDays) * 100).toFixed(2) : 0,
+                pendingLeaves
             });
         }
 

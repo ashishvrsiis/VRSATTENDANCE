@@ -1,10 +1,13 @@
-const fs = require('fs');
+// const fs = require('fs');
 // const https = require('https');
 const http = require('http');
 const express = require('express');
 const WebSocket = require('ws');
 const dotenv = require('dotenv');
 const cors = require('cors');
+require('./schedulers/dailySummaryScheduler');
+require('./schedulers/birthdayCronJob');
+
 const connectDB = require('./config/database');
 const authRoutes = require('./routes/authRoutes');
 const tokenRoutes = require('./routes/tokenRoutes');
@@ -34,15 +37,20 @@ const userProjectTagRoutes = require('./routes/userProjectTagRoutes');
 dotenv.config();
 
 const app = express();
-app.use(express.json());
+// app.use(express.json());
 
-app.use(bodyParser.json({ limit: '50mb' }));
-app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
+// app.use(bodyParser.json({ limit: '100mb' }));
+// app.use(bodyParser.urlencoded({ limit: '100mb', extended: true }));
 
-// app.use(express.json({ limit: '50mb' }));
-// app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
 app.use(cors());
+
+app.use((req, res, next) => {
+  res.setTimeout(0);
+  next();
+});
 
 connectDB();
 
@@ -51,7 +59,7 @@ app.get('/', (req, res) => {
 });
 
 
-app.use(bodyParser.json());
+// app.use(bodyParser.json());
 
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/user', tokenRoutes);
@@ -73,22 +81,19 @@ app.use('/api/v1', tollRoutes);
 app.use("/api/v1", pdfRoutes);
 app.use('/api/v1', teamRoutes);
 app.use('/api/v1', userProjectTagRoutes);
+// Testing
+// app.use('/api/v1/attendance-summary', require('./routes/attendanceSummaryRoutes'));
 
+const PORT = process.env.PORT || 2000;
 const server = http.createServer(app);
+server.timeout = 0;
 
 const wss = new WebSocket.Server({ server });
 setupWebSocket(wss);
 
-// const privateKeyPath = 'C:/Users/ashis/OneDrive/Desktop/Work/VRSATTENDANCE - Backend/myCA.key';
-// const certificatePath = 'C:/Users/ashis/OneDrive/Desktop/Work/VRSATTENDANCE - Backend/myCA.pem';
 
-// const privatekey = fs.readFileSync(privateKeyPath, 'utf8');
-// const certificate = fs.readFileSync(certificatePath, 'utf8');
-// const credentials = {key: privatekey, cert: certificate};
 
-const PORT = process.env.PORT || 2000;
-const httpServer = http.createServer(app);
-httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`HTTP Server is running on port ${PORT}`);
+// const httpServer = http.createServer(app);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`HTTP Server is running on port ${PORT}`);
 });
-

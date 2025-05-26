@@ -572,7 +572,7 @@ exports.generatePlazaAttendanceHistoryExcel = async (req, res) => {
     await attendanceService.generatePlazaAttendanceHistoryExcel(req, res, plazaIds);
 };
 
-exports.generateAllUsersAttendanceSummaryPDF = async (req, res) => {
+    exports.generateAllUsersAttendanceSummaryPDF = async (req, res) => {
     try {
         const { startDate, endDate, deliveryMethod, recipientEmail } = req.query;
         const sanitizedStartDate = startDate || moment().startOf('month').format('YYYY-MM-DD');

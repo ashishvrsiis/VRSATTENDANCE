@@ -33,7 +33,7 @@ class AttendanceRegularizationService {
           }
         } else {
           console.log('User is not a valid manager. No records available.');
-          return []; // No data if not a valid manager
+          return { data: [], pagination: { total: 0, page, limit, totalPages: 0 } };
         }
       }
   
@@ -49,7 +49,7 @@ class AttendanceRegularizationService {
         AttendanceRegularization.find(filter)
           .populate({
             path: 'user',
-            select: 'name email managerId',
+            select: 'name email managerId plazaName',
             populate: { path: 'managerId', select: 'name email _id' }
           })
           .sort({ startDate: -1 })
@@ -73,6 +73,7 @@ class AttendanceRegularizationService {
           managerId: manager ? manager._id : null,
           managerName: manager ? manager.name : 'N/A',
           managerEmail: manager ? manager.email : 'N/A',
+          plazaName: record.plazaName || 'N/A',
         };
       });
   

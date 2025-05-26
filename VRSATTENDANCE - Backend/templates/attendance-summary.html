@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Attendance Summary</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #f2f4f8;
+      margin: 0;
+      padding: 0;
+      color: #333;
+    }
+
+    .email-wrapper {
+      width: 100%;
+      padding: 30px 0;
+      display: flex;
+      justify-content: center;
+    }
+
+    .email-container {
+      background: #ffffff;
+      width: 100%;
+      max-width: 720px;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+      overflow: hidden;
+    }
+
+    .header {
+      background-color: #25325F;
+      color: white;
+      padding: 30px;
+      text-align: center;
+    }
+
+    .header h1 {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 600;
+    }
+
+    .date-banner {
+      background-color: #F7A832;
+      color: #25325F;
+      text-align: center;
+      font-size: 14px;
+      padding: 10px;
+      font-weight: 600;
+      letter-spacing: 1px;
+    }
+
+    .content {
+      padding: 30px;
+    }
+
+    .section {
+      margin-bottom: 35px;
+    }
+
+    .section-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #25325F;
+    }
+
+    .list-box {
+      padding: 15px 20px;
+      border-radius: 8px;
+      line-height: 1.6;
+      font-size: 15px;
+      box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.05);
+    }
+
+    .punched-in {
+      background-color: #e6f5ec;
+      border-left: 5px solid #28a745;
+      color: #2c6b34;
+    }
+
+    .not-punched-in {
+      background-color: #fef1f0;
+      border-left: 5px solid #dc3545;
+      color: #a2271e;
+    }
+
+    .divider {
+      height: 1px;
+      background-color: #ddd;
+      margin: 20px 0;
+    }
+
+    .footer {
+      background-color: #f4f6f9;
+      padding: 20px;
+      font-size: 12px;
+      color: #888;
+      text-align: center;
+      border-top: 1px solid #e1e1e1;
+    }
+
+    .footer strong {
+      color: #25325F;
+    }
+
+    @media (max-width: 600px) {
+      .content {
+        padding: 20px;
+      }
+      .header h1 {
+        font-size: 20px;
+      }
+      .list-box {
+        font-size: 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="email-wrapper">
+    <div class="email-container">
+
+      <!-- Header -->
+      <div class="header">
+        <h1>📊 Daily Attendance Summary</h1>
+      </div>
+
+      <!-- Date Banner -->
+      <div class="date-banner">
+        Summary for: {{date}}
+      </div>
+
+      <!-- Content -->
+      <div class="content">
+        <!-- Punched In -->
+        <div class="section">
+          <div class="section-title">✅ Users Who Punched In</div>
+          <div class="list-box punched-in">
+            {{punchedInList}}
+          </div>
+        </div>
+
+        <!-- Divider -->
+        <div class="divider"></div>
+
+        <!-- Not Punched In -->
+        <div class="section">
+          <div class="section-title">❌ Users Who Did Not Punch In</div>
+          <div class="list-box not-punched-in">
+            {{notPunchedInList}}
+          </div>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="footer">
+        This is an automated email sent by <strong>VRS Attendance System</strong><br>
+        Please do not reply directly to this email.
+      </div>
+
+    </div>
+  </div>
+</body>
+</html>

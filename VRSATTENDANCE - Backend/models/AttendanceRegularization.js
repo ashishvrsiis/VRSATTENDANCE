@@ -10,6 +10,7 @@ const AttendanceSchema = new mongoose.Schema({
   status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' },
   reason: { type: String }, // Optional reason
   approvedBy: { type: String },
+  plazaName: { type: String, required: true },
   updatedAt: { type: Date, default: Date.now },
 });
 

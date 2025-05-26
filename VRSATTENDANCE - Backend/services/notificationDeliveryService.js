@@ -16,3 +16,7 @@ exports.updateDeliveryStatus = async (notificationId, status) => {
         { new: true }
     );
 };
+
+exports.createDeliveriesBulk = async (deliveries) => {
+    return await Delivery.insertMany(deliveries);
+};

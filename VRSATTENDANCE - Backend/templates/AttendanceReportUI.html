@@ -74,11 +74,11 @@
             <div class="user-managerName">Manager Name: {{managerName}}</div>
             <div class="user-managerRole">Manager Role: {{managerRole}}</div>
             <div class="user-workLocation">Work Location: {{workLocation}}</div>
-            <div class="user-plazaName">Plaza Name: {{plazaName}}</div>
-            
+            <div class="user-plazaName">Plaza Name: {{plazaName}}</div>            
             <table>
                 <tr>
-                    <th>Serial No</th><th>Image</th><th>Date</th><th>Status</th><th>Punch-In Time</th><th>Punch-Out Time</th><th>Working Hours</th><th>Attendance Regularized</th><th>Attendance Regularization Approved By</th>
+                    <th>Serial No</th><th>Image</th><th>Date</th><th>Status</th><th>Punch-In Time</th><th>Punch-Out Time</th><th>Working Hours</th><th>Attendance Regularized</th><th>Attendance Regularization Approved By</th><th>Regularization Status</th>
+
                 </tr>
                 {{#each attendanceRecords}}
                 <tr>
@@ -91,6 +91,7 @@
                     <td>{{totalWorkingHours}}</td>
                     <td>{{attendanceRegularized}}</td>
                     <td>{{approvedBy}}</td>
+                    <td>{{regularizationStatus}}</td>
                 </tr>
                 {{/each}}
             </table>
@@ -103,12 +104,14 @@
                     <th>Total Present</th>
                     <th>Total Leaves</th>
                     <th>Total Paid Days</th>
+                    {{#if ../isDetailedReport}}<th>Pending Leave Approvals</th>{{/if}}
                 </tr>
                 <tr>
                     <td>{{summary.totalDays}}</td>
                     <td>{{summary.totalPresent}}</td>
                     <td>{{summary.totalLeaves}}</td>
                     <td>{{summary.totalPaidDays}}</td>
+                    {{#if ../isDetailedReport}}<td>{{summary.pendingApprovals}}</td>{{/if}}
                 </tr>
             </table>
         </div>

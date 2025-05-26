@@ -30,6 +30,10 @@ const registerUser = async (userData, currentUser) => {
         UserTags
     } = userData;
 
+    if (!Array.isArray(UserTags) || UserTags.length === 0) {
+        throw new Error('UserTags are required during registration');
+    }    
+
     try {
 
         email = email.toLowerCase().trim();
@@ -223,7 +227,7 @@ const loginUser = async (email, password) => {
     if (!isMatch) throw new Error('The password you entered is incorrect. Please verify and try again.');
 
     // Ensure the user is approved
-    if (!user.isApproved) throw new Error('User account is not approved yet.');
+    if (!user.isApproved) throw new Error('Thank you for registering with us. Your account is under administrative review and will be activated once approved. If you do not receive an update within 15 days, kindly reach out to our support team or your administrator for further assistance.');
 
     if (user.otpEnabled) {
         // Generate OTP and send via email

@@ -80,3 +80,27 @@ exports.getNotificationsForUser = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
+
+// Fetch unread notification count for a user
+exports.getUnreadNotificationCount = async (req, res) => {
+    try {
+        const userId = req.user.userId; // assuming you're using auth and have user info
+        const unreadCount = await notificationService.countUnreadNotifications(userId);
+        console.log('Current user ID:', req.user.userId);
+        return res.json({ unreadCount });
+    } catch (error) {
+        console.error('Error fetching unread notification count:', error);
+        return res.status(500).json({ error: 'Server error' });
+    }
+};
+
+exports.markAllNotificationsAsRead = async (req, res) => {
+    try {
+        const userId = req.user.userId;
+        await notificationService.markAllAsRead(userId);
+        return res.json({ message: 'All notifications marked as read' });
+    } catch (error) {
+        console.error('Error marking notifications as read:', error);
+        return res.status(500).json({ error: 'Server error' });
+    }
+};

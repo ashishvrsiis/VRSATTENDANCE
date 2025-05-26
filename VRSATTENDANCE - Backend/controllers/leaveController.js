@@ -19,16 +19,19 @@ exports.getLeaveRequests = async (req, res) => {
   try {
     const userId = req.user.userId;
     const userRole = req.user.role;
+    const { page = 1, limit = 10, status } = req.query;
 
-    // Fetch the leave requests along with their messages
-    const leaves = await leaveService.getLeaveRequests(userId, userRole);
+    const result = await leaveService.getLeaveRequests(userId, userRole, {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      status
+    });
 
-    if (!leaves.length) {
+    if (!result.data.length) {
       return res.status(404).json({ message: 'No leave requests found' });
     }
 
-    // Send the leave requests and their messages in the response
-    res.status(200).json(leaves);
+    res.status(200).json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

@@ -23,87 +23,82 @@ exports.getAllLeaveRequests = async () => {
 };
 
 // Get leave requests for a specific employee (for regular employees)
-exports.getLeaveRequests = async (userId, userRole) => {
-  let leaves;
+exports.getLeaveRequests = async (userId, userRole, options = {}) => {
+  const { page = 1, limit = 10, status } = options;
 
-  const managers = await User.find({ role: 3 });
-        console.log(managers); // All managers with the updated 'manager' field
-
-
-  // Retrieve leave requests based on user role
+  let filter = {};
   if (userRole === 1 || userRole === 2) {
-    // Super admin (1) or admin (2): Retrieve all leave requests
-    leaves = await Leave.find({});
+    // Admin/Super Admin
+    if (status) filter.status = status;
   } else if (userRole === 3) {
-    // Manager (3): Retrieve own leave requests + leave requests of employees they manage
+    // Manager
     const managedEmployees = await User.find({ managerId: userId }).select('_id');
     const managedEmployeeIds = managedEmployees.map(emp => emp._id);
 
-    leaves = await Leave.find({
-      $or: [
-        { employeeId: userId }, // Own leave requests
-        { employeeId: { $in: managedEmployeeIds } } // Leave requests of managed employees
-      ]
-    });
+    filter.$or = [
+      { employeeId: userId },
+      { employeeId: { $in: managedEmployeeIds } }
+    ];
+    if (status) filter.status = status;
   } else {
-    // Other roles: Retrieve only own leave requests
-    leaves = await Leave.find({ employeeId: userId });
+    // Regular employee
+    filter.employeeId = userId;
+    if (status) filter.status = status;
   }
 
-  // Process each leave request
-  const leavesWithDetails = await Promise.all(
-    leaves.map(async leave => {
-      // Fetch the applier's details using employeeId
+  const total = await Leave.countDocuments(filter);
+  const leaves = await Leave.find(filter)
+    .skip((page - 1) * limit)
+    .limit(limit)
+    .sort({ createdAt: -1 });
+
+  const processedLeaves = await Promise.all(
+    leaves.map(async (leave) => {
       const applier = await User.findById(leave.employeeId).select('name managerId');
       const applierName = applier?.name || 'Unknown';
 
-      // Fetch the manager (approver) name of the applier
       let approverName = 'No approver assigned';
       if (applier?.managerId) {
         const manager = await User.findById(applier.managerId).select('name');
         approverName = manager?.name || 'No approver assigned';
       }
 
-      // Format dates
-      const formattedStartDate = format(new Date(leave.startDate), 'dd-MM-yyyy');
-      const formattedEndDate = format(new Date(leave.endDate), 'dd-MM-yyyy');
-      const customStartDate = leave.customApprovedStartDate
-        ? format(new Date(leave.customApprovedStartDate), 'dd-MM-yyyy')
-        : null;
-      const customEndDate = leave.customApprovedEndDate
-        ? format(new Date(leave.customApprovedEndDate), 'dd-MM-yyyy')
-        : null;
+      const formatDate = (d) => d ? new Date(d).toISOString().split('T')[0] : null;
 
-      // Generate the appropriate message
-      let approvalMessage = '';
+      let message = '';
       if (leave.status === 'Approved') {
-        if (customStartDate && customEndDate) {
-          approvalMessage = `Your leave has been approved for the custom period from ${customStartDate} to ${customEndDate}.`;
+        if (leave.customApprovedStartDate && leave.customApprovedEndDate) {
+          message = `Your leave has been approved for the custom period from ${formatDate(leave.customApprovedStartDate)} to ${formatDate(leave.customApprovedEndDate)}.`;
         } else {
-          approvalMessage = `Your leave has been fully approved from ${formattedStartDate} to ${formattedEndDate}.`;
+          message = `Your leave has been fully approved from ${formatDate(leave.startDate)} to ${formatDate(leave.endDate)}.`;
         }
       } else if (leave.status === 'Pending') {
-        approvalMessage = 'Your leave request is pending approval.';
+        message = 'Your leave request is pending approval.';
       } else if (leave.status === 'Rejected') {
-        approvalMessage = `Your leave request was rejected. Reason: ${leave.rejectionReason || 'No reason provided'}.`;
+        message = `Your leave request was rejected. Reason: ${leave.rejectionReason || 'No reason provided'}.`;
       }
 
-      // Return the processed leave object
       return {
         ...leave._doc,
-        startDate: formattedStartDate,
-        endDate: formattedEndDate,
-        customApprovedStartDate: customStartDate,
-        customApprovedEndDate: customEndDate,
-        message: approvalMessage,
+        startDate: formatDate(leave.startDate),
+        endDate: formatDate(leave.endDate),
+        customApprovedStartDate: formatDate(leave.customApprovedStartDate),
+        customApprovedEndDate: formatDate(leave.customApprovedEndDate),
+        message,
         applierName,
-        approverName // Now reflects the manager of the applier
+        approverName,
       };
     })
   );
 
-  return leavesWithDetails;
+  return {
+    data: processedLeaves,
+    total,
+    page,
+    totalPages: Math.ceil(total / limit),
+  };
 };
+
 
 // Get leave requests for a manager, including their own and their employees' leave requests
 exports.getLeaveRequestsForManager = async (managerId) => {

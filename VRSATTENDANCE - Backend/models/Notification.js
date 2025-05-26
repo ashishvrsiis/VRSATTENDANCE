@@ -6,6 +6,7 @@ const notificationSchema = new mongoose.Schema({
     message: { type: String, required: true },
     status: { type: String, enum: ['sent', 'delivered', 'failed'], default: 'sent' },
     createdAt: { type: Date, default: Date.now },
+    isRead: { type: Boolean, default: false }
 });
 
 module.exports = mongoose.model('Notification', notificationSchema);

@@ -17,6 +17,7 @@ router.put('/users/:id', authenticateToken, userController.editUser);
 router.post('/user-project-tags/assign-project-tag', authenticateToken, authorizeAdmin, userController.assignUserProjectTag);
 router.put('/admin/update/:id', authenticateToken, userController.updateEmployee);
 router.get('/manager/employees', authenticateToken, userController.getEmployeesByManager);
+router.put('/update-role', authenticateToken, userController.updateUserRole);
 
 
 

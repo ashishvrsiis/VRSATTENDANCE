@@ -75,7 +75,9 @@ exports.assignManager = async (userId, managerId, managerRole) => {
 
 
 exports.emailExists = async (email) => {
+    console.log('🔍 Checking if email exists:', email);
     const user = await User.findOne({ email });
+    console.log('📦 User found:', user);
     return user !== null;
 };
 
@@ -180,4 +182,52 @@ exports.updateEmployeeDetails = async (adminUser, employeeId, updateData) => {
 
 exports.getEmployeesUnderManager = async (managerEmail) => {
     return await User.find({ managerEmail: managerEmail, role: 3 });
+};
+
+exports.updateUserRole = async (currentUser, body) => {
+  const { targetUserId, newRole } = body;
+
+  if (!targetUserId || ![1, 2, 3].includes(newRole)) {
+    return {
+      status: 400,
+      response: { message: 'Invalid target user ID or role' },
+    };
+  }
+
+  if (![1, 2].includes(currentUser.role)) {
+    return {
+      status: 403,
+      response: { message: 'Access denied. Only Super Admin or Admin can update roles.' },
+    };
+  }
+
+  const targetUser = await User.findById(targetUserId);
+  if (!targetUser) {
+    return {
+      status: 404,
+      response: { message: 'Target user not found' },
+    };
+  }
+
+  if (currentUser.role === 2 && newRole < 3) {
+    return {
+      status: 403,
+      response: { message: 'Admins can only update users to role 3' },
+    };
+  }
+
+  if (currentUser.role === 1 && ![2, 3].includes(newRole)) {
+    return {
+      status: 403,
+      response: { message: 'Super Admin can only assign role 2 or 3' },
+    };
+  }
+
+  targetUser.role = newRole;
+  await targetUser.save();
+
+  return {
+    status: 200,
+    response: { message: 'User role updated successfully', updatedUser: targetUser },
+  };
 };

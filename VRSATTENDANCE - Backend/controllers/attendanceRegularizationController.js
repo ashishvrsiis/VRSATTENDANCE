@@ -10,11 +10,27 @@ class AttendanceRegularizationController {
   
       const result = await attendanceRegularizationService.getAttendanceList(user, page, limit, status);
   
-      const formattedData = result.data.map(attendance => ({
-        ...attendance,
-        regularizationType: attendance.leaveType,
-        employeeName: attendance.user?.name || 'Unknown'
-      }));
+     const formattedData = result.data.map(attendance => {
+  let plazaName = attendance.plazaName || 'N/A';
+  let remarks = attendance.remarks;
+
+  // Check if it's OutOfRange and extract the plaza from remarks
+  if (attendance.leaveType === 'OutOfRange' && typeof remarks === 'string') {
+    const match = remarks.match(/Last known plaza:\s*(.*)$/i);
+    if (match) {
+      plazaName = match[1]?.trim() || plazaName;
+      remarks = remarks.replace(/Last known plaza:\s*.*$/i, '').trim(); // remove plaza info from remarks
+    }
+  }
+
+  return {
+    ...attendance,
+    regularizationType: attendance.leaveType,
+    employeeName: attendance.user?.name || 'Unknown',
+    plazaName,
+    remarks
+  };
+});
   
       res.status(200).json({
         records: formattedData,
@@ -28,13 +44,14 @@ class AttendanceRegularizationController {
   
   async applyAttendanceRegularization(req, res) {
     try {
-        const { approverName, startDate, endDate, remarks, regularizationType } = req.body;
+        const { approverName, startDate, endDate, remarks, regularizationType, plazaName } = req.body;
         const attendance = await attendanceRegularizationService.applyAttendanceRegularization({
             approverName,
             startDate,
             endDate,
             remarks,
             leaveType: regularizationType, // Transform regularizationType to leaveType
+            plazaName,
             userId: req.user.userId,
         });
         res.status(201).json({

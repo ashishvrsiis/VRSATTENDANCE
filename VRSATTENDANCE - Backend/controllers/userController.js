@@ -171,16 +171,21 @@ exports.assignManager = async (req, res) => {
 exports.checkEmail = async (req, res) => {
     try {
         const { email } = req.body;
+        console.log('📩 Received email to check:', email);
         if (!email) {
+            console.log('⚠️ Email not provided in request body');
             return res.status(400).json({ message: 'Email is required' });
         }
 
         const managers = await User.find({ role: 3 });
+        console.log('🧑‍💼 All managers with role 3:', managers.map(m => ({ id: m._id, email: m.email })));
         console.log(managers); // All managers with the updated 'manager' field
 
         const exists = await userService.emailExists(email);
+        console.log(`✅ Email ${email} exists:`, exists);
         res.status(200).json({ emailExists: exists });
     } catch (error) {
+        console.error('❌ Error in checkEmail:', error);
         res.status(500).json({ message: error.message });
     }
 };
@@ -189,17 +194,34 @@ exports.getAllUsers = async (req, res) => {
     try {
         const { role } = req.user;
 
-        // Check if user role is Super admin or Admin
+        // Check access rights
         if (role !== 1 && role !== 2) {
             return res.status(403).json({ error: 'Forbidden' });
         }
 
-        // Fetch all users
-        const users = await User.find({}, '-profileImage');
-        res.status(200).json(users);
+        // Parse pagination query params
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
 
+        // Fetch paginated users (excluding profileImage)
+        const [users, total] = await Promise.all([
+            User.find({}, '-profileImage').skip(skip).limit(limit),
+            User.countDocuments()
+        ]);
+
+        const totalPages = Math.ceil(total / limit);
+
+        // Log managers (role: 3)
         const managers = await User.find({ role: 3 });
         console.log(managers); // All managers with the updated 'manager' field
+
+        res.status(200).json({
+            data: users,
+            total,
+            page,
+            totalPages
+        });
 
     } catch (error) {
         console.error('Error fetching users:', error);
@@ -305,3 +327,13 @@ exports.getEmployeesByManager = async (req, res) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
+exports.updateUserRole = async (req, res) => {
+    try {
+      const result = await userService.updateUserRole(req.user, req.body);
+      return res.status(result.status).json(result.response);
+    } catch (error) {
+      console.error('Controller Error - updateUserRole:', error);
+      return res.status(500).json({ message: 'Internal server error' });
+    }
+  };

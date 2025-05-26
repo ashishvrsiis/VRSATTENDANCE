@@ -33,3 +33,19 @@ exports.getAllTagNames = async (req, res) => {
     }
 };
 
+exports.removeUserTag = async (req, res) => {
+    try {
+      const { userId, tagName } = req.body;
+      const currentUser = req.user;
+  
+      const updatedTags = await userProjectTagService.removeUserTag(userId, tagName, currentUser);
+  
+      return res.status(200).json({
+        message: 'Tag removed successfully',
+        tags: updatedTags,
+      });
+    } catch (error) {
+      console.error('Error removing tag:', error.message);
+      return res.status(400).json({ message: error.message });
+    }
+  };
