@@ -3228,7 +3228,11 @@ exports.generateAllUsersAttendanceSummaryPDF = async (startDate, endDate, req, r
 
         console.log('🛠 Processing users data for the summary report...');
         const usersSummaryData = await Promise.all(sortedUsers.map(async (user) => {
-            const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
+            let attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
+                if (!Array.isArray(attendanceRecords)) {
+                console.warn(`⚠️ attendanceRecords for ${user.name || user._id} is not an array. Got:`, attendanceRecords);
+                attendanceRecords = [];
+                }
             const regularizations = await AttendanceRegularization.find({
                 user: user._id,
                 startDate: { $lte: endDate },
