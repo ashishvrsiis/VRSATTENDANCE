@@ -19,29 +19,39 @@ const generateOtp = () => {
 const sendOtp = async (email) => {
     try {
         const otp = generateOtp();
+            console.log(`[sendOtp] Called with: ${email}`);
         const expiration = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes from now
 
         // Find user by email
+        console.log(`[sendOtp] Looking for user: ${email}`);
         const user = await User.findOne({ email });
-        if (!user) throw new Error('User not found');
-
+        if (!user) {
+        console.error(`[sendOtp] User not found: ${email}`);
+            throw new Error('User not found');
+        }
+        console.log(`[sendOtp] Found user: ${user.name}`);
         const managers = await User.find({ role: 3 });
+        console.log(`[sendOtp] Managers count: ${managers.length}`);
         console.log(managers); // All managers with the updated 'manager' field
 
         // Update user with OTP and expiration
         user.otp = otp;
         user.otpExpires = expiration;
         await user.save();
+        console.log(`[sendOtp] Saved OTP to user: ${email}`);
 
         // Send OTP email for forgot password
+        console.log(`[sendOtp] Sending email to: ${user.email}`);
         await sendNotificationEmail(user.email, {
             subject: 'Password Reset Request',  // Set subject here
             templateName: 'forgotPassword',     // Specify the correct template
             replacements: { name: user.name, otp: otp }
         });
+        console.log(`[sendOtp] Email sent successfully to: ${user.email}`);
 
         return 'OTP sent to your email address.';
     } catch (error) {
+        console.error(`[sendOtp] Error: ${error.message}`);
         throw new Error(`Error sending OTP: ${error.message}`);
     }
 };
