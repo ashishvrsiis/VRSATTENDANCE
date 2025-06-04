@@ -13,6 +13,9 @@ const loadTemplate = (filePath, replacements) => {
 
 // Function to send email with dynamic data
 const sendNotificationEmail = async (to, { subject, templateName, replacements }) => {
+     try {
+        console.log(`[sendNotificationEmail] Called for: ${to}, subject: ${subject}, template: ${templateName}`);
+
     // Define paths for different templates
     const templates = {
         'verifyEmail': path.join(__dirname, '..', 'templates', 'verifyEmail.html'),
@@ -23,9 +26,10 @@ const sendNotificationEmail = async (to, { subject, templateName, replacements }
     const templatePath = templates[templateName];
 
     if (!templatePath) {
+                    console.error(`[sendNotificationEmail] Template not found: ${templateName}`);
         throw new Error('Template not found.');
     }
-
+        console.log(`[sendNotificationEmail] Creating transporter...`);
     const transporter = nodemailer.createTransport({
         service: 'gmail',
         auth: {
@@ -35,8 +39,10 @@ const sendNotificationEmail = async (to, { subject, templateName, replacements }
     });
 
     // Load the template and inject dynamic content
+            console.log(`[sendNotificationEmail] Loading template from: ${templatePath}`);
     const htmlContent = loadTemplate(templatePath, replacements);
 
+            console.log(`[sendNotificationEmail] Sending email to: ${to}...`);
     await transporter.sendMail({
         from: process.env.EMAIL_USER,
         to,
@@ -44,6 +50,12 @@ const sendNotificationEmail = async (to, { subject, templateName, replacements }
         html: htmlContent,  // Send the email as HTML content
         text: `Hello ${replacements.name}, here's the relevant information for your request.`,
     });
+            console.log(`[sendNotificationEmail] Email sent successfully to: ${to}`);
+
+ } catch (err) {
+        console.error(`[sendNotificationEmail] Error sending to ${to}:`, err);
+        throw err;
+    }
 };
 
 module.exports = { sendNotificationEmail };
