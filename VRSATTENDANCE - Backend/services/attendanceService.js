@@ -8,7 +8,8 @@ const attendanceRegularizationService = require('../services/attendanceRegulariz
 const Toll = require('../models/tollModel');
 const RecentActivity = require('../models/RecentActivity');
 const AttendanceRegularization = require('../models/AttendanceRegularization');
-const PDFDocument = require('pdfkit');
+// const PDFDocument = require('pdfkit');
+const { PDFDocument } = require('pdf-lib');
 const handlebars = require('handlebars');  // For template processing
 const fs = require('fs');
 const path = require('path');
@@ -23,6 +24,10 @@ const { error } = require('console');
 const streamBuffers = require('stream-buffers');
 const Leave = require('../models/leaveModel');
 const MAX_HTML_SIZE_BYTES = parseInt(process.env.MAX_HTML_SIZE_BYTES || '524288000', 10); // 3MB default
+const archiver = require('archiver');
+const os = require('os');
+
+const BATCH_SIZE = 1;
 
 
 exports.getTodayAttendance = async (userId, date) => {
@@ -859,6 +864,60 @@ exports.retrieveAttendanceHistoryByDateRange = async (userId, startDate, endDate
 //     }
 // };
 
+const streamOrFallbackToEmail = async ({
+  res,
+  filePath,
+  recipientEmail,
+  req,
+  sendEmailWithAttachment,
+  cleanupFn,
+}) => {
+  let sent = false;
+  const readStream = fs.createReadStream(filePath);
+
+  readStream.pipe(res);
+
+  readStream.on('close', () => {
+    if (!sent && cleanupFn) cleanupFn();
+  });
+
+  readStream.on('error', async (err) => {
+    if (sent) return;
+    sent = true;
+    console.error('❌ Error streaming PDF (download failed):', err);
+
+    // End any partial response (try-catch to avoid headers already sent)
+    try {
+      if (!res.headersSent) {
+        res.status(200).json({
+          fallbackToEmail: true,
+          message: 'Report is too large to download. You will receive it via email shortly.',
+        });
+      }
+    } catch {}
+
+    // Fallback: send as email
+    try {
+      if (recipientEmail) {
+        const pdfBuffer = fs.readFileSync(filePath);
+        await sendEmailWithAttachment(recipientEmail, { buffer: pdfBuffer }, {
+          subject: 'Attendance Report',
+          name: req.user?.name || 'User',
+          message: 'The report was too large for download, so it has been sent to your email.',
+          fileType: 'pdf',
+        });
+        console.log('Fallback PDF emailed to:', recipientEmail);
+      } else {
+        console.error('❌ No recipient email provided for fallback.');
+      }
+    } catch (emailErr) {
+      console.error('❌ Error sending PDF via fallback email:', emailErr);
+    } finally {
+      if (cleanupFn) cleanupFn();
+    }
+  });
+};
+
 exports.generateAttendanceReportPDF = async (startDate, endDate, req, res, deliveryMethod, recipientEmail) => {
   try {
     console.log(`🔹 Start Date: ${startDate}, End Date: ${endDate}`);
@@ -883,150 +942,195 @@ exports.generateAttendanceReportPDF = async (startDate, endDate, req, res, deliv
     const templateSource = fs.readFileSync(templatePath, 'utf-8');
     const template = handlebars.compile(templateSource);
 
-    const usersData = [];
-    let estimatedHtmlSize = 0;
+    let batchStart = 0;
+    let batchNum = 1;
+    const pdfPaths = [];
 
-    for (const user of sortedUsers) {
-      const result = await exports.getAttendanceByDateRange(user._id.toString(), startDate, endDate).catch(err => {
-        return { attendance: [] };
-      });
-      const attendanceRecords = Array.isArray(result) ? result : result.attendance || [];
+    // --- Generate PDFs per batch ---
+    while (batchStart < sortedUsers.length) {
+      const batchUsers = sortedUsers.slice(batchStart, batchStart + BATCH_SIZE);
+      const batchUsersData = [];
 
-      const regularizations = await AttendanceRegularization.find({
-        user: user._id,
-        startDate: { $lte: endDate },
-        endDate: { $gte: startDate },
-      }).select('user startDate endDate status approvedBy').lean();
+      for (const user of batchUsers) {
+        const result = await exports.getAttendanceByDateRange(user._id.toString(), startDate, endDate).catch(err => ({ attendance: [] }));
+        const attendanceRecords = Array.isArray(result) ? result : result.attendance || [];
 
-      const regularizedDates = new Map();
-      regularizations.forEach(reg => {
-        const current = moment(reg.startDate);
-        const end = moment(reg.endDate);
-        while (current.isSameOrBefore(end)) {
-          const dateKey = current.format('DD-MM-YYYY');
-          regularizedDates.set(dateKey, {
-            approvedBy: reg.approvedBy || 'N/A',
-            status: reg.status,
-          });
-          current.add(1, 'days');
-        }
-      });
+        const regularizations = await AttendanceRegularization.find({
+          user: user._id,
+          startDate: { $lte: endDate },
+          endDate: { $gte: startDate },
+        }).select('user startDate endDate status approvedBy').lean();
 
-      let totalPresent = 0;
-      let totalLeaves = 0;
-      let totalPaidDays = 0;
-      const totalDays = moment(endDate).diff(moment(startDate), 'days') + 1;
+        const regularizedDates = new Map();
+        regularizations.forEach(reg => {
+          const current = moment(reg.startDate);
+          const end = moment(reg.endDate);
+          while (current.isSameOrBefore(end)) {
+            const dateKey = current.format('DD-MM-YYYY');
+            regularizedDates.set(dateKey, {
+              approvedBy: reg.approvedBy || 'N/A',
+              status: reg.status,
+            });
+            current.add(1, 'days');
+          }
+        });
 
-      const processedAttendanceRecords = attendanceRecords.map((record, index) => {
-        const punchIn = record.punchIn ? moment(record.punchIn) : null;
-        const punchOut = record.punchOut ? moment(record.punchOut) : null;
+        let totalPresent = 0;
+        let totalLeaves = 0;
+        let totalPaidDays = 0;
+        const totalDays = moment(endDate).diff(moment(startDate), 'days') + 1;
 
-        let status = 'Absent';
-        let totalWorkingHours = record.totalWorkingHours || 'N/A';
+        const processedAttendanceRecords = attendanceRecords.map((record, index) => {
+          const punchIn = record.punchIn ? moment(record.punchIn) : null;
+          const punchOut = record.punchOut ? moment(record.punchOut) : null;
 
-        if (totalWorkingHours === 'Shift not marked end' || totalWorkingHours === 'Attendance Regularized') {
-          status = 'Present';
-          totalWorkingHours = 'Shift not marked end';
-        } else if (punchIn && punchOut) {
-          const duration = moment.duration(punchOut.diff(punchIn));
-          const hours = duration.hours();
-          const minutes = duration.minutes();
-          totalWorkingHours = `${hours} Hours${minutes > 0 ? ` ${minutes} Minutes` : ''}`;
+          let status = 'Absent';
+          let totalWorkingHours = record.totalWorkingHours || 'N/A';
 
-          if (hours >= 8) status = 'Present';
-          else if (hours > 0) status = 'Half Day Present';
-        }
+          if (totalWorkingHours === 'Shift not marked end' || totalWorkingHours === 'Attendance Regularized') {
+            status = 'Present';
+            totalWorkingHours = 'Shift not marked end';
+          } else if (punchIn && punchOut) {
+            const duration = moment.duration(punchOut.diff(punchIn));
+            const hours = duration.hours();
+            const minutes = duration.minutes();
+            totalWorkingHours = `${hours} Hours${minutes > 0 ? ` ${minutes} Minutes` : ''}`;
+            if (hours >= 8) status = 'Present';
+            else if (hours > 0) status = 'Half Day Present';
+          }
 
-        const dateKey = moment(record.date).format('DD-MM-YYYY');
-        const regularizationInfo = regularizedDates.get(dateKey);
+          const dateKey = moment(record.date).format('DD-MM-YYYY');
+          const regularizationInfo = regularizedDates.get(dateKey);
 
-        if (status === 'Present') totalPresent += 1;
-        else if (status === 'Half Day Present') totalPresent += 0.5;
+          if (status === 'Present') totalPresent += 1;
+          else if (status === 'Half Day Present') totalPresent += 0.5;
 
-        return {
-          serialNo: index + 1,
-          date: moment(record.date).format('DD-MM-YYYY'),
-          image: record.image,
-          punchIn: punchIn ? punchIn.format('hh:mm A') : 'N/A',
-          punchOut: punchOut ? punchOut.format('hh:mm A') : 'N/A',
-          totalWorkingHours,
-          status,
-          attendanceRegularized: regularizationInfo ? 'Yes' : 'No',
-          approvedBy: regularizationInfo?.approvedBy || 'N/A',
-          regularizationStatus: regularizationInfo?.status || 'Not Applied',
+          return {
+            serialNo: index + 1,
+            date: moment(record.date).format('DD-MM-YYYY'),
+            image: record.image,
+            punchIn: punchIn ? punchIn.format('hh:mm A') : 'N/A',
+            punchOut: punchOut ? punchOut.format('hh:mm A') : 'N/A',
+            totalWorkingHours,
+            status,
+            attendanceRegularized: regularizationInfo ? 'Yes' : 'No',
+            approvedBy: regularizationInfo?.approvedBy || 'N/A',
+            regularizationStatus: regularizationInfo?.status || 'Not Applied',
+          };
+        });
+
+        const leaveRequests = await leaveService.getLeaveRequests(user._id, user.role).catch(() => ({ data: [] }));
+        totalLeaves = leaveRequests.data.length;
+        totalPaidDays = totalPresent + totalLeaves;
+
+        const userData = {
+          name: user.name,
+          email: user.email,
+          phone: user.phone,
+          dateOfBirth: user.dateOfBirth ? moment(user.dateOfBirth).format('DD-MM-YYYY') : 'Not provided',
+          employeeId: user.employeeId,
+          position: user.position,
+          managerName: user.managerName,
+          managerRole: user.managerRole,
+          workLocation: user.workLocation,
+          fatherName: user.fatherName,
+          plazaName: user.plazaName,
+          attendanceRecords: processedAttendanceRecords,
+          summary: { totalDays, totalPresent, totalLeaves, totalPaidDays },
         };
-      });
 
-      const leaveRequests = await leaveService.getLeaveRequests(user._id, user.role).catch(() => ({ data: [] }));
-      totalLeaves = leaveRequests.data.length;
-      totalPaidDays = totalPresent + totalLeaves;
-
-      const userData = {
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        dateOfBirth: user.dateOfBirth ? moment(user.dateOfBirth).format('DD-MM-YYYY') : 'Not provided',
-        employeeId: user.employeeId,
-        position: user.position,
-        managerName: user.managerName,
-        managerRole: user.managerRole,
-        workLocation: user.workLocation,
-        fatherName: user.fatherName,
-        plazaName: user.plazaName,
-        attendanceRecords: processedAttendanceRecords,
-        summary: { totalDays, totalPresent, totalLeaves, totalPaidDays },
-      };
-
-      const testHtml = template({
-        startDate: moment(startDate).format('MMMM Do, YYYY'),
-        endDate: moment(endDate).format('MMMM Do, YYYY'),
-        users: [...usersData, userData],
-      });
-      const size = Buffer.byteLength(testHtml, 'utf8');
-      if (size >= MAX_HTML_SIZE_BYTES) {
-        console.warn('⚠️ Max HTML size reached. Stopping user data appending.');
-        break;
+        batchUsersData.push(userData);
       }
 
-      usersData.push(userData);
-      estimatedHtmlSize = size;
+      // Generate the batch PDF
+      const reportData = {
+        startDate: moment(startDate).format('MMMM Do, YYYY'),
+        endDate: moment(endDate).format('MMMM Do, YYYY'),
+        users: batchUsersData,
+      };
+      const htmlContent = template(reportData);
+
+      const browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'], protocolTimeout: 180000 });
+      const page = await browser.newPage();
+      page.setDefaultTimeout(180000);
+      page.setDefaultNavigationTimeout(180000);
+      await page.setContent(htmlContent, { waitUntil: 'load', timeout: 180000 });
+
+      async function pdfWithTimeout(page, options, timeoutMs) {
+        return Promise.race([
+          page.pdf(options),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('pdf generation timeout')), timeoutMs)),
+        ]);
+      }
+
+      const pdfBuffer = await pdfWithTimeout(page, { format: 'A4', printBackground: true }, 180000);
+      await browser.close();
+
+      const tempPdfPath = path.join(os.tmpdir(), `attendance_batch${batchNum}_${Date.now()}.pdf`);
+      fs.writeFileSync(tempPdfPath, pdfBuffer);
+      pdfPaths.push(tempPdfPath);
+      console.log(`Batch ${batchNum} completed, users so far: ${Math.min(batchStart + BATCH_SIZE, sortedUsers.length)} / ${sortedUsers.length}`);
+      batchStart += BATCH_SIZE;
+      batchNum += 1;
     }
 
-    const reportData = {
-      startDate: moment(startDate).format('MMMM Do, YYYY'),
-      endDate: moment(endDate).format('MMMM Do, YYYY'),
-      users: usersData,
-    };
-    const htmlContent = template(reportData);
-    const browser = await puppeteer.launch();
-    const page = await browser.newPage();
-    await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
-    const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
-    await browser.close();
+    // --- MERGE ALL PDFs ---
+    const mergedPdfPath = path.join(os.tmpdir(), `attendance_report_merged_${Date.now()}.pdf`);
+    const mergedPdfDoc = await PDFDocument.create();
 
-    if (deliveryMethod === 'download') {
+    for (const filePath of pdfPaths) {
+      const pdfBytes = fs.readFileSync(filePath);
+      const pdf = await PDFDocument.load(pdfBytes);
+      const copiedPages = await mergedPdfDoc.copyPages(pdf, pdf.getPageIndices());
+      copiedPages.forEach((page) => mergedPdfDoc.addPage(page));
+    }
+    const mergedPdfBytes = await mergedPdfDoc.save();
+    fs.writeFileSync(mergedPdfPath, mergedPdfBytes);
+    console.log('Merged PDF Size:', fs.statSync(mergedPdfPath).size, 'bytes');
+
+    // --- SEND PDF ---
+    if (normalizedDeliveryMethod === 'download') {
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.pdf`);
-      return res.end(pdfBuffer);
-    } else if (deliveryMethod === 'email') {
+      await streamOrFallbackToEmail({
+        res,
+        filePath: mergedPdfPath,
+        recipientEmail: req.user?.email || recipientEmail,
+        req,
+        sendEmailWithAttachment,
+        cleanupFn: () => {
+          try {
+            fs.unlinkSync(mergedPdfPath);
+            pdfPaths.forEach(fp => fs.unlinkSync(fp));
+            console.log('Temp files cleaned up.');
+          } catch (cleanupErr) {
+            console.error('Error cleaning up files:', cleanupErr);
+          }
+        }
+      });
+    } else if (normalizedDeliveryMethod === 'email') {
       if (!recipientEmail) {
         return res.status(400).json({ message: 'Recipient email is required for emailing the report.' });
       }
-
-      const subject = 'Attendance Report';
-      const name = req.user?.name || 'User';
-      const message = `Please find your attendance report attached.${usersData.length < sortedUsers.length ? `\n\nNote: Only the first ${usersData.length} users were included due to PDF size constraints.` : ''}`;
-
-      await sendEmailWithAttachment(recipientEmail, { buffer: pdfBuffer }, { subject, name, message, fileType: 'pdf' });
-      return res.status(200).json({
-        message: usersData.length < sortedUsers.length ? 'Partial report emailed due to size limit.' : 'Attendance report emailed successfully.',
-        includedUsers: usersData.length,
-        estimatedHtmlSize,
+      const mergedPdfBuffer = fs.readFileSync(mergedPdfPath); // Read as Buffer!
+      await sendEmailWithAttachment(recipientEmail, { buffer: mergedPdfBuffer }, {
+        subject: 'Attendance Report',
+        name: req.user?.name || 'User',
+        message: `Attendance report is attached as a single PDF.`,
+        fileType: 'pdf'
       });
+
+      res.status(200).json({ message: 'Report emailed successfully.' });
+      // Cleanup
+      fs.unlinkSync(mergedPdfPath);
+      pdfPaths.forEach(fp => fs.unlinkSync(fp));
     }
+
   } catch (error) {
     console.error('❌ Error during PDF generation:', error);
-    res.status(500).json({ message: 'Failed to generate the report.' });
+    if (!res.headersSent) {
+      res.status(500).json({ message: 'Failed to generate the report.' });
+    }
   }
 };
 
