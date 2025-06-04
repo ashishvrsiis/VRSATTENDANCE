@@ -105,14 +105,18 @@ const verifyOtpAndChangePassword = async (email, otp, newPassword) => {
 
 const forgotPassword = async (email, newPassword, otp) => {
     try {
+        console.log(`[passwordService] Called with:`, { email, newPassword: !!newPassword, otp: !!otp });
         // If OTP and new password are provided, verify OTP and change password
         if (otp && newPassword) {
+            console.log(`[passwordService] Verifying OTP and changing password for: ${email}`);
             return await verifyOtpAndChangePassword(email, otp, newPassword);
         }
 
         // Otherwise, generate and send OTP for forgot password
+        console.log(`[passwordService] Sending OTP to: ${email}`);
         return await sendOtp(email);
     } catch (error) {
+        console.error(`[passwordService] Error: ${error.message}`);
         throw new Error(`Error handling forgot password request: ${error.message}`);
     }
 };

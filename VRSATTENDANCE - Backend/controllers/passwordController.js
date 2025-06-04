@@ -3,9 +3,12 @@ const passwordService = require('../services/passwordService');
 const forgotPassword = async (req, res) => {
     try {
         const { email, newPassword, otp } = req.body;
+        console.log(`[passwordController] Forgot password request:`, { email, newPassword: !!newPassword, otp: !!otp });
         const message = await passwordService.forgotPassword(email, newPassword, otp);
+        console.log(`[passwordController] Response:`, message);
         res.status(200).json({ message });
     } catch (error) {
+        console.error(`[passwordController] Error:`, error.message);
         res.status(400).json({ message: error.message });
     }
 };
