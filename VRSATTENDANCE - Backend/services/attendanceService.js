@@ -863,6 +863,7 @@ exports.retrieveAttendanceHistoryByDateRange = async (userId, startDate, endDate
 //         res.status(500).json({ message: 'Failed to generate the report.' });
 //     }
 // };
+const RESPONSE_TIMEOUT_MS = 30_000;
 
 const streamOrFallbackToEmail = async ({
   res,
@@ -871,24 +872,45 @@ const streamOrFallbackToEmail = async ({
   req,
   sendEmailWithAttachment,
   cleanupFn,
+  respondedFlag = () => false,
+  setResponded = () => {},
 }) => {
   let sent = false;
   const readStream = fs.createReadStream(filePath);
 
-  readStream.pipe(res);
+  // Only set headers and pipe if not already responded
+  if (!respondedFlag() && !res.headersSent) {
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename=attendance_report_${Date.now()}.pdf`
+    );
+    readStream.pipe(res);
+  }
 
   readStream.on('close', () => {
     if (!sent && cleanupFn) cleanupFn();
   });
 
+  readStream.on('end', () => {
+    // Streaming finished successfully
+    if (!sent && !respondedFlag()) {
+      setResponded();
+      sent = true;
+    }
+    if (cleanupFn) cleanupFn();
+  });
+
   readStream.on('error', async (err) => {
     if (sent) return;
     sent = true;
+    setResponded();
+
     console.error('❌ Error streaming PDF (download failed):', err);
 
-    // End any partial response (try-catch to avoid headers already sent)
     try {
-      if (!res.headersSent) {
+      // Only try to respond if not already sent due to timeout
+      if (!respondedFlag() && !res.headersSent) {
         res.status(200).json({
           fallbackToEmail: true,
           message: 'Report is too large to download. You will receive it via email shortly.',
@@ -896,29 +918,67 @@ const streamOrFallbackToEmail = async ({
       }
     } catch {}
 
-    // Fallback: send as email
     try {
-      if (recipientEmail) {
-        const pdfBuffer = fs.readFileSync(filePath);
-        await sendEmailWithAttachment(recipientEmail, { buffer: pdfBuffer }, {
-          subject: 'Attendance Report',
-          name: req.user?.name || 'User',
-          message: 'The report was too large for download, so it has been sent to your email.',
-          fileType: 'pdf',
-        });
-        console.log('Fallback PDF emailed to:', recipientEmail);
-      } else {
-        console.error('❌ No recipient email provided for fallback.');
+  if (recipientEmail) {
+    const pdfBuffer = fs.readFileSync(filePath);
+    await sendEmailWithAttachment(
+      recipientEmail,
+      { buffer: pdfBuffer },
+      {
+        subject: 'Attendance Report',
+        name: req.user?.name || 'User',
+        message: 'The report was too large for download, so it has been sent to your email.',
+        fileType: 'pdf',
       }
-    } catch (emailErr) {
-      console.error('❌ Error sending PDF via fallback email:', emailErr);
-    } finally {
-      if (cleanupFn) cleanupFn();
+    );
+    console.log('Fallback PDF emailed to:', recipientEmail);
+  } else {
+    console.error('❌ No recipient email provided for fallback.');
+  }
+} catch (emailErr) {
+  console.error('❌ Error sending PDF via fallback email:', emailErr);
+  // Notify user about the error
+  if (recipientEmail) {
+    try {
+      await sendEmailWithAttachment(
+        recipientEmail,
+        {},
+        {
+          subject: 'Attendance Report – Delivery Failed',
+          name: req.user?.name || 'User',
+          message:
+            `We tried to email your attendance report but encountered this error:\n\n` +
+            `${emailErr.message || emailErr}\n\n` +
+            `Please contact support if this continues.`,
+          fileType: null,
+        }
+      );
+      console.log('Error explanation email sent to:', recipientEmail);
+    } catch (notifyErr) {
+      console.error('❌ Error sending notification email:', notifyErr);
     }
+  }
+} finally {
+  if (cleanupFn) cleanupFn();
+}
   });
 };
 
 exports.generateAttendanceReportPDF = async (startDate, endDate, req, res, deliveryMethod, recipientEmail) => {
+    let responded = false;
+    const timeout = setTimeout(() => {
+    if (!responded && !res.headersSent) {
+      responded = true;
+      res.status(200).json({
+        fallbackToEmail: true,
+        message: 'Report is too large to download. You will receive it via email shortly.',
+      });
+      // Optionally log
+      console.log('🕒 30s timeout: Fallback to email triggered');
+    }
+    // Else: already responded or streamed
+  }, RESPONSE_TIMEOUT_MS);
+
   try {
     console.log(`🔹 Start Date: ${startDate}, End Date: ${endDate}`);
     console.log(`🔹 Delivery Method: ${deliveryMethod}`);
@@ -1090,24 +1150,42 @@ exports.generateAttendanceReportPDF = async (startDate, endDate, req, res, deliv
 
     // --- SEND PDF ---
     if (normalizedDeliveryMethod === 'download') {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.pdf`);
-      await streamOrFallbackToEmail({
-        res,
-        filePath: mergedPdfPath,
-        recipientEmail: req.user?.email || recipientEmail,
-        req,
-        sendEmailWithAttachment,
-        cleanupFn: () => {
-          try {
-            fs.unlinkSync(mergedPdfPath);
-            pdfPaths.forEach(fp => fs.unlinkSync(fp));
-            console.log('Temp files cleaned up.');
-          } catch (cleanupErr) {
-            console.error('Error cleaning up files:', cleanupErr);
-          }
+  if (!responded && !res.headersSent) {    // <---- Only attempt download if NOT responded!
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.pdf`);
+    await streamOrFallbackToEmail({
+      res,
+      filePath: mergedPdfPath,
+      recipientEmail: req.user?.email || recipientEmail,
+      req,
+      sendEmailWithAttachment,
+      cleanupFn: () => {
+        try {
+          fs.unlinkSync(mergedPdfPath);
+          pdfPaths.forEach(fp => fs.unlinkSync(fp));
+          console.log('Temp files cleaned up.');
+        } catch (cleanupErr) {
+          console.error('Error cleaning up files:', cleanupErr);
         }
+      },
+      respondedFlag: () => responded,
+      setResponded: () => { responded = true; },
+    });
+  } else {
+    // Don't attempt streaming, just do fallback (send to email)
+    if (req.user?.email || recipientEmail) {
+      const pdfBuffer = fs.readFileSync(mergedPdfPath);
+      await sendEmailWithAttachment(req.user?.email || recipientEmail, { buffer: pdfBuffer }, {
+        subject: 'Attendance Report',
+        name: req.user?.name || 'User',
+        message: 'The report was too large for download, so it has been sent to your email.',
+        fileType: 'pdf',
       });
+    }
+    // Cleanup temp files
+    fs.unlinkSync(mergedPdfPath);
+    pdfPaths.forEach(fp => fs.unlinkSync(fp));
+  }
     } else if (normalizedDeliveryMethod === 'email') {
       if (!recipientEmail) {
         return res.status(400).json({ message: 'Recipient email is required for emailing the report.' });
@@ -1125,14 +1203,62 @@ exports.generateAttendanceReportPDF = async (startDate, endDate, req, res, deliv
       fs.unlinkSync(mergedPdfPath);
       pdfPaths.forEach(fp => fs.unlinkSync(fp));
     }
+    clearTimeout(timeout);
 
   } catch (error) {
+        clearTimeout(timeout);
     console.error('❌ Error during PDF generation:', error);
-    if (!res.headersSent) {
+    if (!responded && !res.headersSent) {
       res.status(500).json({ message: 'Failed to generate the report.' });
     }
   }
 };
+
+async function sendExcelFallbackEmail({
+  recipientEmail,
+  buffer,
+  req,
+  sendxlsxEmailWithAttachment,
+  fileName,
+  startDate,
+  endDate
+}) {
+  try {
+    await sendxlsxEmailWithAttachment(
+      recipientEmail,
+      { buffer },
+      {
+        subject: "Attendance Report",
+        name: req.user?.name || 'User',
+        message: `The report was too large for download, so it has been sent to your email for the period ${startDate} to ${endDate}.`,
+        fileType: "xlsx",
+        fileName,
+      }
+    );
+    console.log('Fallback Excel emailed to:', recipientEmail);
+  } catch (emailErr) {
+    console.error('❌ Error sending Excel via fallback email:', emailErr);
+    // Send error notification email
+    try {
+      await sendxlsxEmailWithAttachment(
+        recipientEmail,
+        {},
+        {
+          subject: 'Attendance Report – Delivery Failed',
+          name: req.user?.name || 'User',
+          message:
+            `We tried to email your attendance report but encountered this error:\n\n` +
+            `${emailErr.message || emailErr}\n\n` +
+            `Please contact support if this continues.`,
+          fileType: null,
+        }
+      );
+      console.log('Error explanation email sent to:', recipientEmail);
+    } catch (notifyErr) {
+      console.error('❌ Error sending notification email:', notifyErr);
+    }
+  }
+}
 
 exports.generateAttendanceReportExcel = async (startDate, endDate, res, deliveryMethod, recipientEmail) => {
     try {
@@ -1452,21 +1578,120 @@ exports.generateAttendanceReportExcel = async (startDate, endDate, res, delivery
           }
           
 
-        if (deliveryMethod === 'download') {
-            const fileName = `attendance_report_${moment().format('YYYYMMDDHHmmss')}.xlsx`;
+        if (deliveryMethod === "download") {
+  const fileName = `attendance_report_${moment().format('YYYYMMDDHHmmss')}.xlsx`;
 
-            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-            res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
-            res.send(buffer);
-            res.end();
-        }
+  let responded = false;
+  const RESPONSE_TIMEOUT_MS = 30_000;
+
+  // Set timeout for fallback to email
+  const timeout = setTimeout(async () => {
+    if (!responded && !res.headersSent) {
+      responded = true;
+      res.status(200).json({
+        fallbackToEmail: true,
+        message: "Report is too large to download. You will receive it via email shortly.",
+      });
+      // Send the email in the background (don't wait here)
+      if (recipientEmail) {
+        sendExcelFallbackEmail({
+          recipientEmail,
+          buffer,
+          req,
+          sendxlsxEmailWithAttachment,
+          fileName,
+          startDate,
+          endDate,
+        });
+      }
+    }
+  }, RESPONSE_TIMEOUT_MS);
+
+  try {
+    // Attempt to send the file to the client
+    if (!responded && !res.headersSent) {
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+      res.send(buffer);
+      res.end();
+      responded = true;
+      clearTimeout(timeout);
+    }
+  } catch (error) {
+    clearTimeout(timeout);
+    console.error('Error sending Excel report:', error);
+    // If still not responded, send fallback to email
+    if (!responded && !res.headersSent) {
+      responded = true;
+      res.status(200).json({
+        fallbackToEmail: true,
+        message: "Report is too large to download. You will receive it via email shortly.",
+      });
+      if (recipientEmail) {
+        sendExcelFallbackEmail({
+          recipientEmail,
+          buffer,
+          req,
+          sendxlsxEmailWithAttachment,
+          fileName,
+          startDate,
+          endDate,
+        });
+      }
+    }
+  }
+}
     } catch (error) {
         console.error('Error generating Excel report:', error);
         res.status(500).json({ message: 'Failed to generate Excel report' });
     }
 };
 
+async function sendFallbackPdfEmail({
+  recipientEmail,
+  pdfBuffer,
+  req,
+  sendEmailWithAttachment,
+}) {
+  try {
+    await sendEmailWithAttachment(
+      recipientEmail,
+      { buffer: pdfBuffer },
+      {
+        subject: 'Attendance Report',
+        name: req.user?.name || 'User',
+        message: 'The report was too large for download, so it has been sent to your email.',
+        fileType: 'pdf',
+      }
+    );
+    console.log('Fallback PDF emailed to:', recipientEmail);
+  } catch (emailErr) {
+    console.error('❌ Error sending PDF via fallback email:', emailErr);
+    // Notify user about the error
+    try {
+      await sendEmailWithAttachment(
+        recipientEmail,
+        {},
+        {
+          subject: 'Attendance Report – Delivery Failed',
+          name: req.user?.name || 'User',
+          message:
+            `We tried to email your attendance report but encountered this error:\n\n` +
+            `${emailErr.message || emailErr}\n\n` +
+            `Please contact support if this continues.`,
+          fileType: null,
+        }
+      );
+      console.log('Error explanation email sent to:', recipientEmail);
+    } catch (notifyErr) {
+      console.error('❌ Error sending notification email:', notifyErr);
+    }
+  }
+}
+
 exports.generateCurrentUserAttendanceHistoryPDF = async (req, res, userId) => {
+     let responded = false;
+     let tempFilePath = null;
     try {
         console.log('Starting PDF generation process...');
         
@@ -1662,15 +1887,61 @@ exports.generateCurrentUserAttendanceHistoryPDF = async (req, res, userId) => {
 
         // Send PDF response
         console.log('Sending PDF response to client...');
-        if (deliveryMethod === 'download') {
-            console.log('Delivery Method: Download');
-            console.log('Sending PDF response for download...');
-            res.setHeader('Content-Type', 'application/pdf');
-            res.setHeader(
-                'Content-Disposition',
-                `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.pdf`
-            );
-            return res.end(pdfBuffer);
+         if (deliveryMethod === 'download') {
+  const finalRecipientEmail = req.query.recipientEmail || req.user?.email;
+  const RESPONSE_TIMEOUT_MS = 30_000;
+
+  // Set up timeout fallback
+  const timeout = setTimeout(async () => {
+    if (!responded && !res.headersSent) {
+      responded = true;
+      res.status(200).json({
+        fallbackToEmail: true,
+        message: 'Report is too large to download. You will receive it via email shortly.',
+      });
+      if (finalRecipientEmail) {
+        await sendFallbackPdfEmail({
+          recipientEmail: finalRecipientEmail,
+          pdfBuffer,
+          req,
+          sendEmailWithAttachment,
+        });
+      }
+    }
+  }, RESPONSE_TIMEOUT_MS);
+
+  try {
+    if (!responded && !res.headersSent) {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.pdf`
+      );
+      res.end(pdfBuffer, () => {
+        if (!responded) {
+          responded = true;
+          clearTimeout(timeout);
+        }
+      });
+    }
+  } catch (err) {
+    clearTimeout(timeout);
+    if (!responded && !res.headersSent) {
+      responded = true;
+      res.status(200).json({
+        fallbackToEmail: true,
+        message: 'Report is too large to download. You will receive it via email shortly.',
+      });
+      if (finalRecipientEmail) {
+        await sendFallbackPdfEmail({
+          recipientEmail: finalRecipientEmail,
+          pdfBuffer,
+          req,
+          sendEmailWithAttachment,
+        });
+      }
+    }
+  }
         } else if (deliveryMethod === 'email') {
             console.log('Delivery Method: Email');
             if (!finalRecipientEmail) {
@@ -1693,7 +1964,53 @@ exports.generateCurrentUserAttendanceHistoryPDF = async (req, res, userId) => {
     }
 };
 
+async function sendFallbackExcelEmail({
+  recipientEmail,
+  excelBuffer,
+  req,
+  sendxlsxEmailWithAttachment,
+  startDate,
+  endDate,
+  user
+}) {
+  try {
+    await sendxlsxEmailWithAttachment(
+      recipientEmail,
+      { buffer: excelBuffer },
+      {
+        subject: 'Attendance Report',
+        name: user.name || 'Employee',
+        message: `The report was too large to download, so it has been sent to your email for the period from ${startDate} to ${endDate}.`,
+        fileType: 'xlsx',
+      }
+    );
+    console.log('Fallback Excel emailed to:', recipientEmail);
+  } catch (emailErr) {
+    console.error('❌ Error sending Excel via fallback email:', emailErr);
+    // Notify user about the error
+    try {
+      await sendxlsxEmailWithAttachment(
+        recipientEmail,
+        {},
+        {
+          subject: 'Attendance Report – Delivery Failed',
+          name: user.name || 'Employee',
+          message:
+            `We tried to email your attendance report but encountered this error:\n\n` +
+            `${emailErr.message || emailErr}\n\n` +
+            `Please contact support if this continues.`,
+          fileType: null,
+        }
+      );
+      console.log('Error explanation email sent to:', recipientEmail);
+    } catch (notifyErr) {
+      console.error('❌ Error sending notification email:', notifyErr);
+    }
+  }
+}
+
 exports.generateCurrentUserAttendanceHistoryExcel = async (req, res, { deliveryMethod, recipientEmail }) => {
+     let responded = false;
     try {
         const user = req.user; // User extracted from the token
         const { startDate, endDate } = req.query;
@@ -1966,9 +2283,59 @@ exports.generateCurrentUserAttendanceHistoryExcel = async (req, res, { deliveryM
         const buffer = await workbook.xlsx.writeBuffer();
 
         if (deliveryMethod === 'download') {
-            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-            res.setHeader('Content-Disposition', `attachment; filename=attendance_history_${moment().format('YYYYMMDDHHmmss')}.xlsx`);
-            res.end(buffer);
+      const timeout = setTimeout(async () => {
+        if (!responded && !res.headersSent) {
+          responded = true;
+          res.status(200).json({
+            fallbackToEmail: true,
+            message: 'Report is too large to download. You will receive it via email shortly.',
+          });
+          if (recipientEmail) {
+            await sendFallbackExcelEmail({
+              recipientEmail,
+              excelBuffer: buffer,
+              req,
+              sendxlsxEmailWithAttachment,
+              startDate,
+              endDate,
+              user
+            });
+          }
+        }
+      }, RESPONSE_TIMEOUT_MS);
+
+      try {
+        if (!responded && !res.headersSent) {
+          res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+          res.setHeader('Content-Disposition', `attachment; filename=attendance_history_${moment().format('YYYYMMDDHHmmss')}.xlsx`);
+          res.end(buffer, () => {
+            if (!responded) {
+              responded = true;
+              clearTimeout(timeout);
+            }
+          });
+        }
+      } catch (err) {
+        clearTimeout(timeout);
+        if (!responded && !res.headersSent) {
+          responded = true;
+          res.status(200).json({
+            fallbackToEmail: true,
+            message: 'Report is too large to download. You will receive it via email shortly.',
+          });
+          if (recipientEmail) {
+            await sendFallbackExcelEmail({
+              recipientEmail,
+              excelBuffer: buffer,
+              req,
+              sendxlsxEmailWithAttachment,
+              startDate,
+              endDate,
+              user
+            });
+          }
+        }
+      }
         } else if (deliveryMethod === 'email') {
             const subject = 'Attendance Report';
             const name = user.name || 'Employee';
@@ -1988,6 +2355,50 @@ exports.generateCurrentUserAttendanceHistoryExcel = async (req, res, { deliveryM
         res.status(500).json({ message: 'Failed to generate Excel report' });
     }
 };
+
+async function sendFallbackExcelEmail({
+  recipientEmail,
+  excelBuffer,
+  sendxlsxEmailWithAttachment,
+  startDate,
+  endDate,
+  user
+}) {
+  try {
+    await sendxlsxEmailWithAttachment(
+      recipientEmail,
+      { buffer: excelBuffer },
+      {
+        subject: 'Attendance Report',
+        name: user?.name || 'Employee',
+        message: `The report was too large to download, so it has been sent to your email for the period from ${startDate} to ${endDate}.`,
+        fileType: 'xlsx',
+      }
+    );
+    console.log('Fallback Excel emailed to:', recipientEmail);
+  } catch (emailErr) {
+    console.error('❌ Error sending Excel via fallback email:', emailErr);
+    // Notify user about the error
+    try {
+      await sendxlsxEmailWithAttachment(
+        recipientEmail,
+        {},
+        {
+          subject: 'Attendance Report – Delivery Failed',
+          name: user?.name || 'Employee',
+          message:
+            `We tried to email your attendance report but encountered this error:\n\n` +
+            `${emailErr.message || emailErr}\n\n` +
+            `Please contact support if this continues.`,
+          fileType: null,
+        }
+      );
+      console.log('Error explanation email sent to:', recipientEmail);
+    } catch (notifyErr) {
+      console.error('❌ Error sending notification email:', notifyErr);
+    }
+  }
+}
 
 exports.generateUserAttendanceHistoryExcel = async (req, res, userId) => {
     try {
@@ -2216,9 +2627,59 @@ exports.generateUserAttendanceHistoryExcel = async (req, res, userId) => {
         const buffer = await workbook.xlsx.writeBuffer();
 
         if (deliveryMethod === 'download') {
-            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-            res.setHeader('Content-Disposition', `attachment; filename=attendance_history_${moment().format('YYYYMMDDHHmmss')}.xlsx`);
-            res.end(buffer);
+  let responded = false;
+  const RESPONSE_TIMEOUT_MS = 30_000;
+  const timeout = setTimeout(async () => {
+    if (!responded && !res.headersSent) {
+      responded = true;
+      res.status(200).json({
+        fallbackToEmail: true,
+        message: 'Report is too large to download. You will receive it via email shortly.',
+      });
+      if (finalRecipientEmail) {
+        await sendFallbackExcelEmail({
+          recipientEmail: finalRecipientEmail,
+          excelBuffer: buffer,
+          sendxlsxEmailWithAttachment,
+          startDate,
+          endDate,
+          user
+        });
+      }
+    }
+  }, RESPONSE_TIMEOUT_MS);
+
+  try {
+    if (!responded && !res.headersSent) {
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename=attendance_history_${moment().format('YYYYMMDDHHmmss')}.xlsx`);
+      res.end(buffer, () => {
+        if (!responded) {
+          responded = true;
+          clearTimeout(timeout);
+        }
+      });
+    }
+  } catch (err) {
+    clearTimeout(timeout);
+    if (!responded && !res.headersSent) {
+      responded = true;
+      res.status(200).json({
+        fallbackToEmail: true,
+        message: 'Report is too large to download. You will receive it via email shortly.',
+      });
+      if (finalRecipientEmail) {
+        await sendFallbackExcelEmail({
+          recipientEmail: finalRecipientEmail,
+          excelBuffer: buffer,
+          sendxlsxEmailWithAttachment,
+          startDate,
+          endDate,
+          user
+        });
+      }
+    }
+  }
         } else if (deliveryMethod === 'email') {
             if (!finalRecipientEmail) {
                 return res.status(400).json({ message: 'Email address is required for email delivery method' });
@@ -2243,7 +2704,51 @@ exports.generateUserAttendanceHistoryExcel = async (req, res, userId) => {
     }
 };
 
+async function sendFallbackPdfEmail({
+  recipientEmail,
+  pdfBuffer,
+  sendEmailWithAttachment,
+  req,
+}) {
+  try {
+    await sendEmailWithAttachment(
+      recipientEmail,
+      { buffer: pdfBuffer },
+      {
+        subject: 'Attendance Report',
+        name: req.user?.name || 'User',
+        message: 'The report was too large to download, so it has been sent to your email.',
+        fileType: 'pdf',
+      }
+    );
+    console.log('Fallback PDF emailed to:', recipientEmail);
+  } catch (emailErr) {
+    console.error('❌ Error sending PDF via fallback email:', emailErr);
+    // Notify user about the error
+    try {
+      await sendEmailWithAttachment(
+        recipientEmail,
+        {},
+        {
+          subject: 'Attendance Report – Delivery Failed',
+          name: req.user?.name || 'User',
+          message:
+            `We tried to email your attendance report but encountered this error:\n\n` +
+            `${emailErr.message || emailErr}\n\n` +
+            `Please contact support if this continues.`,
+          fileType: null,
+        }
+      );
+      console.log('Error explanation email sent to:', recipientEmail);
+    } catch (notifyErr) {
+      console.error('❌ Error sending notification email:', notifyErr);
+    }
+  }
+}
+
+
 exports.generateUserAttendanceHistoryPDF = async (req, res, userId) => {
+        let responded = false;
     try {
         const { startDate, endDate, deliveryMethod, recipientEmail } = req.query;
 
@@ -2448,15 +2953,56 @@ exports.generateUserAttendanceHistoryPDF = async (req, res, userId) => {
         const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
         await browser.close();
 
-        if (deliveryMethod === 'download') {
-            console.log('Delivery Method: Download');
-            console.log('Sending PDF response for download...');
-            res.setHeader('Content-Type', 'application/pdf');
-            res.setHeader(
-                'Content-Disposition',
-                `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.pdf`
-            );
-            return res.end(pdfBuffer);
+         if (deliveryMethod === 'download') {
+            const finalRecipientEmail = req.user?.email || recipientEmail;
+            const RESPONSE_TIMEOUT_MS = 30_000;
+            const timeout = setTimeout(async () => {
+                if (!responded && !res.headersSent) {
+                    responded = true;
+                    res.status(200).json({
+                        fallbackToEmail: true,
+                        message: 'Report is too large to download. You will receive it via email shortly.',
+                    });
+                    if (finalRecipientEmail) {
+                        await sendFallbackPdfEmail({
+                            recipientEmail: finalRecipientEmail,
+                            pdfBuffer,
+                            sendEmailWithAttachment,
+                            req,
+                        });
+                    }
+                }
+            }, RESPONSE_TIMEOUT_MS);
+
+            try {
+                if (!responded && !res.headersSent) {
+                    res.setHeader('Content-Type', 'application/pdf');
+                    res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.pdf`);
+                    res.end(pdfBuffer, () => {
+                        if (!responded) {
+                            responded = true;
+                            clearTimeout(timeout);
+                        }
+                    });
+                }
+            } catch (err) {
+                clearTimeout(timeout);
+                if (!responded && !res.headersSent) {
+                    responded = true;
+                    res.status(200).json({
+                        fallbackToEmail: true,
+                        message: 'Report is too large to download. You will receive it via email shortly.',
+                    });
+                    if (finalRecipientEmail) {
+                        await sendFallbackPdfEmail({
+                            recipientEmail: finalRecipientEmail,
+                            pdfBuffer,
+                            sendEmailWithAttachment,
+                            req,
+                        });
+                    }
+                }
+            }
         } else if (deliveryMethod === 'email') {
             console.log('Delivery Method: Email');
             if (!finalRecipientEmail) {
@@ -2480,6 +3026,7 @@ exports.generateUserAttendanceHistoryPDF = async (req, res, userId) => {
 };
 
 exports.generateUserTagsAttendanceHistoryPDF = async (req, res, userTags) => {
+    let responded = false;
     try {
         const { startDate, endDate, deliveryMethod, recipientEmail } = req.query;
 
@@ -2637,9 +3184,54 @@ exports.generateUserTagsAttendanceHistoryPDF = async (req, res, userTags) => {
         await browser.close();
 
         if (deliveryMethod === 'download') {
-            res.setHeader('Content-Type', 'application/pdf');
-            res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.pdf`);
-            return res.end(pdfBuffer);
+            const RESPONSE_TIMEOUT_MS = 30_000;
+            const timeout = setTimeout(async () => {
+                if (!responded && !res.headersSent) {
+                    responded = true;
+                    res.status(200).json({
+                        fallbackToEmail: true,
+                        message: 'Report is too large to download. You will receive it via email shortly.',
+                    });
+                    if (finalRecipientEmail) {
+                        await sendFallbackPdfEmail({
+                            recipientEmail: finalRecipientEmail,
+                            pdfBuffer,
+                            sendEmailWithAttachment,
+                            req,
+                        });
+                    }
+                }
+            }, RESPONSE_TIMEOUT_MS);
+
+            try {
+                if (!responded && !res.headersSent) {
+                    res.setHeader('Content-Type', 'application/pdf');
+                    res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.pdf`);
+                    res.end(pdfBuffer, () => {
+                        if (!responded) {
+                            responded = true;
+                            clearTimeout(timeout);
+                        }
+                    });
+                }
+            } catch (err) {
+                clearTimeout(timeout);
+                if (!responded && !res.headersSent) {
+                    responded = true;
+                    res.status(200).json({
+                        fallbackToEmail: true,
+                        message: 'Report is too large to download. You will receive it via email shortly.',
+                    });
+                    if (finalRecipientEmail) {
+                        await sendFallbackPdfEmail({
+                            recipientEmail: finalRecipientEmail,
+                            pdfBuffer,
+                            sendEmailWithAttachment,
+                            req,
+                        });
+                    }
+                }
+            }
         } else if (deliveryMethod === 'email') {
             await sendEmailWithAttachment(finalRecipientEmail, { buffer: pdfBuffer }, {
                 subject: 'Attendance Report',
@@ -2658,6 +3250,7 @@ exports.generateUserTagsAttendanceHistoryPDF = async (req, res, userTags) => {
 };
 
 exports.generateUserTagsAttendanceHistoryExcel = async (req, res, userTags) => {
+    let responded = false;
     try {
         const currentUser = req.user;
         const { startDate, endDate, deliveryMethod, recipientEmail } = req.query;
@@ -2857,9 +3450,54 @@ exports.generateUserTagsAttendanceHistoryExcel = async (req, res, userTags) => {
         const buffer = await workbook.xlsx.writeBuffer();
 
         if (deliveryMethod === 'download') {
-            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-            res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.xlsx`);
-            res.end(buffer);
+            const RESPONSE_TIMEOUT_MS = 30_000;
+            const timeout = setTimeout(async () => {
+                if (!responded && !res.headersSent) {
+                    responded = true;
+                    res.status(200).json({
+                        fallbackToEmail: true,
+                        message: 'Report is too large to download. You will receive it via email shortly.',
+                    });
+                    if (finalRecipientEmail) {
+                        await sendFallbackExcelEmail({
+                            recipientEmail: finalRecipientEmail,
+                            buffer,
+                            sendxlsxEmailWithAttachment,
+                            req,
+                        });
+                    }
+                }
+            }, RESPONSE_TIMEOUT_MS);
+
+            try {
+                if (!responded && !res.headersSent) {
+                    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+                    res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${moment().format('YYYYMMDDHHmmss')}.xlsx`);
+                    res.end(buffer, () => {
+                        if (!responded) {
+                            responded = true;
+                            clearTimeout(timeout);
+                        }
+                    });
+                }
+            } catch (err) {
+                clearTimeout(timeout);
+                if (!responded && !res.headersSent) {
+                    responded = true;
+                    res.status(200).json({
+                        fallbackToEmail: true,
+                        message: 'Report is too large to download. You will receive it via email shortly.',
+                    });
+                    if (finalRecipientEmail) {
+                        await sendFallbackExcelEmail({
+                            recipientEmail: finalRecipientEmail,
+                            buffer,
+                            sendxlsxEmailWithAttachment,
+                            req,
+                        });
+                    }
+                }
+            }
         } else if (deliveryMethod === 'email') {
             await sendxlsxEmailWithAttachment(finalRecipientEmail, { buffer }, {
                 subject: 'Attendance Report (Excel)',
@@ -2876,6 +3514,7 @@ exports.generateUserTagsAttendanceHistoryExcel = async (req, res, userTags) => {
 };
 
 exports.generateAttendanceReportByPlaza = async (startDate, endDate, plazaName, req, res, deliveryMethod, recipientEmail) => {
+    let responded = false;
     try {
         console.log(`\n🔹 [START] Generating Attendance Report`);
         console.log(`📅 Start Date: ${startDate}, End Date: ${endDate}`);
@@ -3043,10 +3682,58 @@ regularizations.forEach(reg => {
         await browser.close();
         console.log('✅ PDF Report Generated Successfully.');
 
-        if (normalizedDeliveryMethod === 'download') {
-            res.setHeader('Content-Type', 'application/pdf');
-            res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${plazaName.trim()}.pdf`);
-            return res.end(pdfBuffer);
+       if (normalizedDeliveryMethod === 'download') {
+            const RESPONSE_TIMEOUT_MS = 30_000;
+            const userEmail = recipientEmail || req.user?.email;
+            const timeout = setTimeout(async () => {
+                if (!responded && !res.headersSent) {
+                    responded = true;
+                    res.status(200).json({
+                        fallbackToEmail: true,
+                        message: 'Report is too large to download. You will receive it via email shortly.',
+                    });
+                    if (userEmail) {
+                        await sendFallbackPlazaPdfEmail({
+                            recipientEmail: userEmail,
+                            pdfBuffer,
+                            sendEmailWithAttachment,
+                            req,
+                            plazaName,
+                        });
+                    }
+                }
+            }, RESPONSE_TIMEOUT_MS);
+
+            try {
+                if (!responded && !res.headersSent) {
+                    res.setHeader('Content-Type', 'application/pdf');
+                    res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${plazaName.trim()}.pdf`);
+                    res.end(pdfBuffer, () => {
+                        if (!responded) {
+                            responded = true;
+                            clearTimeout(timeout);
+                        }
+                    });
+                }
+            } catch (err) {
+                clearTimeout(timeout);
+                if (!responded && !res.headersSent) {
+                    responded = true;
+                    res.status(200).json({
+                        fallbackToEmail: true,
+                        message: 'Report is too large to download. You will receive it via email shortly.',
+                    });
+                    if (userEmail) {
+                        await sendFallbackPlazaPdfEmail({
+                            recipientEmail: userEmail,
+                            pdfBuffer,
+                            sendEmailWithAttachment,
+                            req,
+                            plazaName,
+                        });
+                    }
+                }
+            }
         } else if (normalizedDeliveryMethod === 'email') {
             if (!recipientEmail) {
                 recipientEmail = req.user?.email;
@@ -3071,6 +3758,7 @@ regularizations.forEach(reg => {
 };
 
 exports.generatePlazaAttendanceHistoryExcel = async (req, res) => {
+     let responded = false;
     try {
         const { startDate, endDate, plazaName, deliveryMethod, recipientEmail } = req.query;
 
@@ -3270,10 +3958,58 @@ exports.generatePlazaAttendanceHistoryExcel = async (req, res) => {
         const buffer = await workbook.xlsx.writeBuffer();
         const fileName = `plaza_attendance_report_${moment().format('YYYYMMDDHHmmss')}.xlsx`;
 
-        if (deliveryMethod === 'download') {
-            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-            res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
-            res.end(buffer);
+         if (deliveryMethod === 'download') {
+            const finalRecipient = recipientEmail || req.user?.email;
+            const RESPONSE_TIMEOUT_MS = 30_000;
+            const timeout = setTimeout(async () => {
+                if (!responded && !res.headersSent) {
+                    responded = true;
+                    res.status(200).json({
+                        fallbackToEmail: true,
+                        message: 'Report is too large to download. You will receive it via email shortly.',
+                    });
+                    if (finalRecipient) {
+                        await sendFallbackPlazaExcelEmail({
+                            recipientEmail: finalRecipient,
+                            excelBuffer: buffer,
+                            sendxlsxEmailWithAttachment,
+                            req,
+                            plazaName,
+                        });
+                    }
+                }
+            }, RESPONSE_TIMEOUT_MS);
+
+            try {
+                if (!responded && !res.headersSent) {
+                    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+                    res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+                    res.end(buffer, () => {
+                        if (!responded) {
+                            responded = true;
+                            clearTimeout(timeout);
+                        }
+                    });
+                }
+            } catch (err) {
+                clearTimeout(timeout);
+                if (!responded && !res.headersSent) {
+                    responded = true;
+                    res.status(200).json({
+                        fallbackToEmail: true,
+                        message: 'Report is too large to download. You will receive it via email shortly.',
+                    });
+                    if (finalRecipient) {
+                        await sendFallbackPlazaExcelEmail({
+                            recipientEmail: finalRecipient,
+                            excelBuffer: buffer,
+                            sendxlsxEmailWithAttachment,
+                            req,
+                            plazaName,
+                        });
+                    }
+                }
+            }
         } else if (deliveryMethod === 'email') {
             const finalRecipient = recipientEmail || req.user?.email;
             if (!finalRecipient) {
@@ -3293,7 +4029,48 @@ exports.generatePlazaAttendanceHistoryExcel = async (req, res) => {
     }
 };
 
+async function sendFallbackPlazaExcelEmail({
+    recipientEmail,
+    excelBuffer,
+    sendxlsxEmailWithAttachment,
+    req,
+    plazaName
+}) {
+    try {
+        await sendxlsxEmailWithAttachment(
+            recipientEmail,
+            { buffer: excelBuffer },
+            {
+                subject: 'Plaza Attendance Report (Excel)',
+                name: req.user?.name || 'User',
+                message: 'The report was too large to download, so it has been sent to your email.',
+                fileType: 'xlsx'
+            }
+        );
+        console.log('Fallback Plaza Excel emailed to:', recipientEmail);
+    } catch (emailErr) {
+        console.error('❌ Error sending Plaza Excel via fallback email:', emailErr);
+        // Optionally notify user of email failure
+        try {
+            await sendxlsxEmailWithAttachment(
+                recipientEmail,
+                {},
+                {
+                    subject: 'Plaza Attendance Report (Excel) – Delivery Failed',
+                    name: req.user?.name || 'User',
+                    message: `We tried to email your plaza attendance report but encountered this error:\n\n` +
+                        `${emailErr.message || emailErr}\n\nPlease contact support if this continues.`,
+                    fileType: null
+                }
+            );
+        } catch (notifyErr) {
+            console.error('❌ Error sending notification email:', notifyErr);
+        }
+    }
+}
+
 exports.generateAllUsersAttendanceSummaryPDF = async (startDate, endDate, req, res, deliveryMethod, recipientEmail) => {
+    let responded = false;
     try {
         console.log(`🔹 Start Date: ${startDate}, End Date: ${endDate}`);
         console.log(`🔹 Delivery Method: ${deliveryMethod}`);
@@ -3409,12 +4186,58 @@ exports.generateAllUsersAttendanceSummaryPDF = async (startDate, endDate, req, r
         await browser.close();
 
         if (deliveryMethod === 'download') {
-            res.setHeader('Content-Type', 'application/pdf');
-            res.setHeader(
-                'Content-Disposition',
-                `attachment; filename=all_users_summary_report_${moment().format('YYYYMMDDHHmmss')}.pdf`
-            );
-            return res.end(pdfBuffer);
+            const finalRecipient = recipientEmail || req.user?.email;
+            const RESPONSE_TIMEOUT_MS = 30_000;
+            const timeout = setTimeout(async () => {
+                if (!responded && !res.headersSent) {
+                    responded = true;
+                    res.status(200).json({
+                        fallbackToEmail: true,
+                        message: 'Report is too large to download. You will receive it via email shortly.',
+                    });
+                    if (finalRecipient) {
+                        await sendFallbackAllUsersSummaryPdfEmail({
+                            recipientEmail: finalRecipient,
+                            pdfBuffer,
+                            sendEmailWithAttachment,
+                            req
+                        });
+                    }
+                }
+            }, RESPONSE_TIMEOUT_MS);
+
+            try {
+                if (!responded && !res.headersSent) {
+                    res.setHeader('Content-Type', 'application/pdf');
+                    res.setHeader(
+                        'Content-Disposition',
+                        `attachment; filename=all_users_summary_report_${moment().format('YYYYMMDDHHmmss')}.pdf`
+                    );
+                    res.end(pdfBuffer, () => {
+                        if (!responded) {
+                            responded = true;
+                            clearTimeout(timeout);
+                        }
+                    });
+                }
+            } catch (err) {
+                clearTimeout(timeout);
+                if (!responded && !res.headersSent) {
+                    responded = true;
+                    res.status(200).json({
+                        fallbackToEmail: true,
+                        message: 'Report is too large to download. You will receive it via email shortly.',
+                    });
+                    if (finalRecipient) {
+                        await sendFallbackAllUsersSummaryPdfEmail({
+                            recipientEmail: finalRecipient,
+                            pdfBuffer,
+                            sendEmailWithAttachment,
+                            req
+                        });
+                    }
+                }
+            }
         } else if (deliveryMethod === 'email') {
             if (!recipientEmail) {
                 recipientEmail = req.user?.email;
@@ -3439,6 +4262,7 @@ exports.generateAllUsersAttendanceSummaryPDF = async (startDate, endDate, req, r
 };
 
 exports.generateAllUsersAttendanceSummaryExcel = async (startDate, endDate, req, res, deliveryMethod, recipientEmail) => {
+     let responded = false;
     try {
         console.log(`🔹 Start Date: ${startDate}, End Date: ${endDate}`);
         console.log(`🔹 Delivery Method: ${deliveryMethod}`);
@@ -3465,7 +4289,13 @@ exports.generateAllUsersAttendanceSummaryExcel = async (startDate, endDate, req,
 
         console.log('🛠 Processing users data for the summary report...');
         const usersSummaryData = await Promise.all(sortedUsers.map(async (user) => {
-            const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
+            let attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
+            if (attendanceRecords && attendanceRecords.attendance) {
+                attendanceRecords = attendanceRecords.attendance;
+            }
+            if (!Array.isArray(attendanceRecords)) {
+                attendanceRecords = [];
+            }
             const regularizations = await AttendanceRegularization.find({
                 user: user._id,
                 startDate: { $lte: endDate },
@@ -3548,10 +4378,56 @@ exports.generateAllUsersAttendanceSummaryExcel = async (startDate, endDate, req,
         const buffer = await workbook.xlsx.writeBuffer();
         console.log('✅ Excel file generated.');
 
-        if (deliveryMethod === 'download') {
-            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-            res.setHeader('Content-Disposition', `attachment; filename=all_users_summary_report_${moment().format('YYYYMMDDHHmmss')}.xlsx`);
-            return res.end(buffer);
+         if (deliveryMethod === 'download') {
+            let emailToSend = recipientEmail || req.user?.email;
+            const RESPONSE_TIMEOUT_MS = 30_000;
+            const timeout = setTimeout(async () => {
+                if (!responded && !res.headersSent) {
+                    responded = true;
+                    res.status(200).json({
+                        fallbackToEmail: true,
+                        message: 'Report is too large to download. You will receive it via email shortly.',
+                    });
+                    if (emailToSend) {
+                        await sendFallbackAllUsersSummaryExcelEmail({
+                            recipientEmail: emailToSend,
+                            excelBuffer: buffer,
+                            sendEmailWithAttachment,
+                            req
+                        });
+                    }
+                }
+            }, RESPONSE_TIMEOUT_MS);
+
+            try {
+                if (!responded && !res.headersSent) {
+                    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+                    res.setHeader('Content-Disposition', `attachment; filename=all_users_summary_report_${moment().format('YYYYMMDDHHmmss')}.xlsx`);
+                    res.end(buffer, () => {
+                        if (!responded) {
+                            responded = true;
+                            clearTimeout(timeout);
+                        }
+                    });
+                }
+            } catch (err) {
+                clearTimeout(timeout);
+                if (!responded && !res.headersSent) {
+                    responded = true;
+                    res.status(200).json({
+                        fallbackToEmail: true,
+                        message: 'Report is too large to download. You will receive it via email shortly.',
+                    });
+                    if (emailToSend) {
+                        await sendFallbackAllUsersSummaryExcelEmail({
+                            recipientEmail: emailToSend,
+                            excelBuffer: buffer,
+                            sendEmailWithAttachment,
+                            req
+                        });
+                    }
+                }
+            }
         } else if (deliveryMethod === 'email') {
             if (!recipientEmail) {
                 recipientEmail = req.user?.email;
@@ -3575,7 +4451,49 @@ exports.generateAllUsersAttendanceSummaryExcel = async (startDate, endDate, req,
     }
 };
 
+async function sendFallbackAllUsersSummaryExcelEmail({
+    recipientEmail,
+    excelBuffer,
+    sendEmailWithAttachment,
+    req
+}) {
+    try {
+        await sendEmailWithAttachment(
+            recipientEmail,
+            { buffer: excelBuffer },
+            {
+                subject: 'All Users Attendance Summary Report (Excel)',
+                name: req.user?.name || 'User',
+                message: 'The report was too large to download, so it has been sent to your email.',
+                fileType: 'xlsx'
+            }
+        );
+        console.log('Fallback Excel emailed to:', recipientEmail);
+    } catch (emailErr) {
+        console.error('❌ Error sending Excel via fallback email:', emailErr);
+        // Optionally notify user of email failure
+        try {
+            await sendEmailWithAttachment(
+                recipientEmail,
+                {},
+                {
+                    subject: 'Attendance Summary Excel Report – Delivery Failed',
+                    name: req.user?.name || 'User',
+                    message: `We tried to email your summary report but encountered this error:\n\n` +
+                        `${emailErr.message || emailErr}\n\nPlease contact support if this continues.`,
+                    fileType: null
+                }
+            );
+        } catch (notifyErr) {
+            console.error('❌ Error sending notification email:', notifyErr);
+        }
+    }
+}
+
 exports.generateUserTagsAttendanceSummaryPDF = async (req, res, userTags) => {
+    let responded = false;
+    let finalRecipientEmail = req.user?.email || recipientEmail;
+    const RESPONSE_TIMEOUT_MS = 30_000;
     try {
         const { startDate, endDate, deliveryMethod } = req.query;
         let { recipientEmail } = req.query;
@@ -3604,7 +4522,15 @@ exports.generateUserTagsAttendanceSummaryPDF = async (req, res, userTags) => {
 
         console.log('🛠 Processing users data for the summary report...');
         const usersSummaryData = await Promise.all(sortedUsers.map(async (user) => {
-            const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate) || [];
+            let attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
+            if (!Array.isArray(attendanceRecords)) {
+                // Try to extract array if method returns { attendance: [...] }
+                if (attendanceRecords && Array.isArray(attendanceRecords.attendance)) {
+                    attendanceRecords = attendanceRecords.attendance;
+                } else {
+                    attendanceRecords = [];
+                }
+            }
             const regularizations = await AttendanceRegularization.find({
                 user: user._id,
                 startDate: { $lte: endDate },
@@ -3677,9 +4603,36 @@ exports.generateUserTagsAttendanceSummaryPDF = async (req, res, userTags) => {
         await browser.close();
 
         if (deliveryMethod === 'download') {
-            res.setHeader('Content-Type', 'application/pdf');
-            res.setHeader('Content-Disposition', `attachment; filename=user_tags_summary_report_${moment().format('YYYYMMDDHHmmss')}.pdf`);
-            return res.end(pdfBuffer);
+    // Start the fallback timer
+    const timeout = setTimeout(async () => {
+        if (!responded && !res.headersSent) {
+            responded = true;
+            res.status(200).json({
+                fallbackToEmail: true,
+                message: 'Report is too large to download. You will receive it via email shortly.',
+            });
+            if (finalRecipientEmail) {
+                await sendUserTagsFallbackPdfEmail({
+                    recipientEmail: finalRecipientEmail,
+                    pdfBuffer,
+                    sendEmailWithAttachment,
+                    req
+                });
+            }
+        }
+    }, RESPONSE_TIMEOUT_MS);
+
+    // Send the file download response
+    if (!responded && !res.headersSent) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=user_tags_summary_report_${moment().format('YYYYMMDDHHmmss')}.pdf`);
+        res.end(pdfBuffer, () => {
+            if (!responded) {
+                responded = true;
+                clearTimeout(timeout);
+            }
+        });
+    }
         } else if (deliveryMethod === 'email') {
             if (!recipientEmail) {
                 recipientEmail = req.user?.email;
@@ -3704,7 +4657,50 @@ exports.generateUserTagsAttendanceSummaryPDF = async (req, res, userTags) => {
     }
 };
 
+async function sendUserTagsFallbackExcelEmail({
+    recipientEmail,
+    excelBuffer,
+    sendEmailWithAttachment,
+    req
+}) {
+    try {
+        await sendEmailWithAttachment(
+            recipientEmail,
+            { buffer: excelBuffer },
+            {
+                subject: 'User Tags Attendance Summary Report (Excel)',
+                name: req.user?.name || 'User',
+                message: 'The report was too large to download, so it has been sent to your email.',
+                fileType: 'xlsx'
+            }
+        );
+        console.log('Fallback Excel emailed to:', recipientEmail);
+    } catch (emailErr) {
+        console.error('❌ Error sending Excel via fallback email:', emailErr);
+        // Optionally notify user of email failure
+        try {
+            await sendEmailWithAttachment(
+                recipientEmail,
+                {},
+                {
+                    subject: 'Attendance Summary Excel Report – Delivery Failed',
+                    name: req.user?.name || 'User',
+                    message: `We tried to email your summary report but encountered this error:\n\n` +
+                        `${emailErr.message || emailErr}\n\nPlease contact support if this continues.`,
+                    fileType: null
+                }
+            );
+        } catch (notifyErr) {
+            console.error('❌ Error sending notification email:', notifyErr);
+        }
+    }
+}
+
+
 exports.generateUserTagsAttendanceSummaryExcel = async (req, res, userTags) => {
+    let responded = false;
+    let finalRecipientEmail = req.user?.email || recipientEmail;
+    const RESPONSE_TIMEOUT_MS = 30_000;
     try {
         const { startDate, endDate, deliveryMethod } = req.query;
         let { recipientEmail } = req.query;
@@ -3733,7 +4729,14 @@ exports.generateUserTagsAttendanceSummaryExcel = async (req, res, userTags) => {
 
         console.log('🛠 Processing users data for the summary report...');
         const usersSummaryData = await Promise.all(sortedUsers.map(async (user) => {
-            const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate) || [];
+             let attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
+                if (!Array.isArray(attendanceRecords)) {
+                    if (attendanceRecords && Array.isArray(attendanceRecords.attendance)) {
+                        attendanceRecords = attendanceRecords.attendance;
+                    } else {
+                        attendanceRecords = [];
+                    }
+                }
             const regularizations = await AttendanceRegularization.find({
                 user: user._id,
                 startDate: { $lte: endDate },
@@ -3820,10 +4823,36 @@ exports.generateUserTagsAttendanceSummaryExcel = async (req, res, userTags) => {
 
         const buffer = await workbook.xlsx.writeBuffer();
         
-        if (deliveryMethod === 'download') {
-            res.setHeader('Content-Disposition', `attachment; filename=user_tags_summary_${moment().format('YYYYMMDDHHmmss')}.xlsx`);
-            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-            return res.end(buffer);
+        const timeout = setTimeout(async () => {
+    if (!responded && !res.headersSent) {
+        responded = true;
+        res.status(200).json({
+            fallbackToEmail: true,
+            message: 'Report is too large to download. You will receive it via email shortly.',
+        });
+        if (finalRecipientEmail) {
+            await sendUserTagsFallbackExcelEmail({
+                recipientEmail: finalRecipientEmail,
+                excelBuffer: buffer,
+                sendEmailWithAttachment,
+                req
+            });
+        }
+    }
+}, RESPONSE_TIMEOUT_MS);
+
+// --- Download block ---
+if (deliveryMethod === 'download') {
+    if (!responded && !res.headersSent) {
+        res.setHeader('Content-Disposition', `attachment; filename=user_tags_summary_${moment().format('YYYYMMDDHHmmss')}.xlsx`);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.end(buffer, () => {
+            if (!responded) {
+                responded = true;
+                clearTimeout(timeout);
+            }
+        });
+    }
         } else if (deliveryMethod === 'email') {
             if (!recipientEmail) {
                 recipientEmail = req.user?.email;
@@ -3885,7 +4914,14 @@ exports.generateAttendanceReportSummaryByPlaza = async (startDate, endDate, plaz
         const usersWithoutId = users.filter(u => !u.employeeId);
         const sortedUsers = [...usersWithId, ...usersWithoutId];
         const usersSummaryData = await Promise.all(sortedUsers.map(async (user) => {
-            const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
+            let attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
+                if (!Array.isArray(attendanceRecords)) {
+                    if (attendanceRecords && Array.isArray(attendanceRecords.attendance)) {
+                        attendanceRecords = attendanceRecords.attendance;
+                    } else {
+                        attendanceRecords = [];
+                    }
+                }
             const regularizations = await AttendanceRegularization.find({
                 user: user._id,
                 startDate: { $lte: endDate },
@@ -3947,6 +4983,29 @@ exports.generateAttendanceReportSummaryByPlaza = async (startDate, endDate, plaz
             users: usersSummaryData
         };
 
+        let responded = false;
+        let finalRecipientEmail = req.user?.email || recipientEmail;
+        const RESPONSE_TIMEOUT_MS = 30_000;
+
+        const timeout = setTimeout(async () => {
+            if (!responded && !res.headersSent) {
+                responded = true;
+                res.status(200).json({
+                    fallbackToEmail: true,
+                    message: 'Report is too large to download. You will receive it via email shortly.',
+                });
+                if (finalRecipientEmail) {
+                    await sendPlazaSummaryFallbackPdfEmail({
+                        recipientEmail: finalRecipientEmail,
+                        pdfBuffer,
+                        sendEmailWithAttachment,
+                        req
+                    });
+                }
+            }
+        }, RESPONSE_TIMEOUT_MS);
+
+
         console.log('📌 Compiling HTML report template...');
         const htmlContent = handlebars.compile(fs.readFileSync('templates/AttendanceReportPlazaUI.html', 'utf-8'))(reportData);
 
@@ -3959,9 +5018,16 @@ exports.generateAttendanceReportSummaryByPlaza = async (startDate, endDate, plaz
         console.log('✅ PDF Report Generated Successfully.');
 
         if (normalizedDeliveryMethod === 'download') {
-            res.setHeader('Content-Type', 'application/pdf');
-            res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${plazaName.trim()}.pdf`);
-            return res.end(pdfBuffer);
+            if (!responded && !res.headersSent) {
+                res.setHeader('Content-Type', 'application/pdf');
+                res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${plazaName.trim()}.pdf`);
+                res.end(pdfBuffer, () => {
+                    if (!responded) {
+                        responded = true;
+                        clearTimeout(timeout);
+                    }
+                });
+            }
         } else if (normalizedDeliveryMethod === 'email') {
             if (!recipientEmail) {
                 recipientEmail = req.user?.email;
@@ -4037,7 +5103,14 @@ exports.generateAttendanceReportSummaryByPlazaExcel = async (startDate, endDate,
         });
 
         for (const user of sortedUsers) {
-            const attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
+            let attendanceRecords = await this.getAttendanceByDateRange(user._id, startDate, endDate);
+                if (!Array.isArray(attendanceRecords)) {
+                    if (attendanceRecords && Array.isArray(attendanceRecords.attendance)) {
+                        attendanceRecords = attendanceRecords.attendance;
+                    } else {
+                        attendanceRecords = [];
+                    }
+                }
             const totalDays = attendanceRecords.length;
             const presentDays = attendanceRecords.filter(r => r.present === 'Yes' || r.present === 'Attendance Regularized').length;
             const absentDays = totalDays - presentDays;
@@ -4082,11 +5155,40 @@ exports.generateAttendanceReportSummaryByPlazaExcel = async (startDate, endDate,
         const buffer = await workbook.xlsx.writeBuffer();
         console.log('✅ Excel Report Generated Successfully.');
 
+        let responded = false;
+let finalRecipientEmail = req.user?.email || recipientEmail;
+const RESPONSE_TIMEOUT_MS = 30_000;
+
+const timeout = setTimeout(async () => {
+    if (!responded && !res.headersSent) {
+        responded = true;
+        res.status(200).json({
+            fallbackToEmail: true,
+            message: 'Report is too large to download. You will receive it via email shortly.',
+        });
+        if (finalRecipientEmail) {
+            await sendPlazaSummaryFallbackExcelEmail({
+                recipientEmail: finalRecipientEmail,
+                excelBuffer: buffer,
+                sendEmailWithAttachment,
+                req
+            });
+        }
+    }
+}, RESPONSE_TIMEOUT_MS);
+
         if (deliveryMethod === 'download') {
-            res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${plazaName.trim()}.xlsx`);
-            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-            res.setHeader('Content-Length', buffer.length);
-            return res.end(buffer);
+    if (!responded && !res.headersSent) {
+        res.setHeader('Content-Disposition', `attachment; filename=attendance_report_${plazaName.trim()}.xlsx`);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Length', buffer.length);
+        res.end(buffer, () => {
+            if (!responded) {
+                responded = true;
+                clearTimeout(timeout);
+            }
+        });
+    }
         } else if (deliveryMethod === 'email') {
             if (!recipientEmail) recipientEmail = req.user?.email;
             if (!recipientEmail) {
